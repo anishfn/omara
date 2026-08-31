@@ -1,0 +1,52 @@
+{
+  "schemaVersion": 1,
+  "id": "anishfn.omara",
+  "name": "Omara",
+  "version": "1.0.0",
+  "author": "anishfn",
+  "license": "MIT",
+  "description": "Switch your entire Omarchy desktop into the way you work: workspaces, notifications, audio, wallpaper, theme, apps, and commands, per mode.",
+  "repository": "https://github.com/anishfn/omara",
+  "keywords": [
+    "productivity",
+    "workspace",
+    "automation",
+    "desktop",
+    "modes",
+    "workflow",
+    "quickshell"
+  ],
+  "kinds": [
+    "bar-widget",
+    "service"
+  ],
+  "entryPoints": {
+    "barWidget": "BarWidget.qml",
+    "service": "Service.qml"
+  },
+  "barWidget": {
+    "displayName": "Omara",
+    "description": "Show the active desktop mode and switch between modes.",
+    "category": "Productivity",
+    "allowMultiple": false,
+    "defaultSection": "left",
+    "defaults": {
+      "showIcon": true,
+      "showName": true
+    },
+    "schema": [
+      {
+        "key": "showIcon",
+        "type": "boolean",
+        "label": "Show the mode icon",
+        "defaultValue": true
+      },
+      {
+        "key": "showName",
+        "type": "boolean",
+        "label": "Show the mode name",
+        "defaultValue": true
+      }
+    ]
+  }
+}
