@@ -127,7 +127,7 @@ test("setting an active mode that does not exist is refused", () => {
 
 // ------------------------------------------------------------ activation
 
-test("the activation plan is ordered environment first, processes last", () => {
+test("the activation plan is ordered environment first, focus last", () => {
   const ctx = Model.normalizeMode({
     id: "gaming", name: "Gaming",
     notifications: { dnd: true },
@@ -138,7 +138,7 @@ test("the activation plan is ordered environment first, processes last", () => {
     commands: { onActivate: ["notify-send hi"] }
   }, [])
   assert.deepEqual(Model.activationPlan(ctx, {}).map(s => s.kind),
-    ["dnd", "audio", "wallpaper", "theme", "workspace", "applications", "commands"])
+    ["dnd", "audio", "wallpaper", "theme", "applications", "commands", "workspace"])
 })
 
 test("settings-only activation never launches apps or runs commands", () => {
@@ -557,6 +557,71 @@ test("nothing user-visible still says context", () => {
     const hits = source.split("\n").filter((line) => /\bcontexts?\b/i.test(line))
     assert.deepEqual(hits, [], file + " still says context")
   }
+})
+
+// --------------------------------------------------------- window placement
+
+test("the landing workspace is focused after the applications, not before", () => {
+  const cfg = Model.parseConfig(JSON.stringify({
+    version: 1,
+    modes: [{ id: "c", name: "C", workspaces: { target: 1 },
+      applications: [{ desktopId: "chromium", workspace: 2, enabled: true }],
+      commands: { onActivate: ["echo hi"], onDeactivate: [] } }]
+  })).config
+  const kinds = Model.activationPlan(cfg.modes[0], { launchApps: true }).map((s) => s.kind)
+  // A window that lands on the wrong workspace takes focus with it, so the
+  // focus has to come last or the mode leaves you somewhere else.
+  assert.equal(kinds[kinds.length - 1], "workspace")
+  assert.ok(kinds.indexOf("applications") < kinds.indexOf("workspace"))
+  assert.ok(kinds.indexOf("commands") < kinds.indexOf("workspace"))
+})
+
+test("a settings-only pass still focuses the landing workspace", () => {
+  const cfg = Model.parseConfig(JSON.stringify({
+    version: 1,
+    modes: [{ id: "c", name: "C", workspaces: { target: 3 },
+      applications: [{ desktopId: "chromium", workspace: 2, enabled: true }] }]
+  })).config
+  const plan = Model.activationPlan(cfg.modes[0], { settingsOnly: true })
+  assert.deepEqual(plan.map((s) => s.kind), ["workspace"])
+  assert.equal(plan[0].value, 3)
+})
+
+test("placement keys cover the reverse-dns and plain forms of an app", () => {
+  assert.deepEqual(Model.placementKeys("chromium", "", ""), ["chromium"])
+  assert.deepEqual(Model.placementKeys("com.mitchellh.ghostty", "", ""),
+    ["com.mitchellh.ghostty", "ghostty"])
+  // Two-letter noise would match half the desktop, so it is dropped.
+  assert.deepEqual(Model.placementKeys("", "vi", ""), [])
+})
+
+test("a window is matched to the launch that was waiting for it", () => {
+  const now = Date.now()
+  const pending = [{ keys: Model.placementKeys("chromium", "", ""), workspace: "2", at: now }]
+  assert.equal(Model.matchPlacement(pending, "chromium", now), 0)
+  assert.equal(Model.matchPlacement(pending, "org.chromium.Chromium", now), 0)
+  assert.equal(Model.matchPlacement(pending, "firefox", now), -1)
+})
+
+test("a launch that never produced a window stops being waited on", () => {
+  const now = Date.now()
+  const stale = now - Model.PLACEMENT_TTL_MS - 1
+  const pending = [{ keys: ["chromium"], workspace: "2", at: stale }]
+  assert.equal(Model.matchPlacement(pending, "chromium", now), -1)
+  assert.deepEqual(Model.prunePlacements(pending, now), [])
+  assert.equal(Model.prunePlacements([{ keys: ["chromium"], workspace: "2", at: now }], now).length, 1)
+})
+
+test("a stray window is moved without dragging focus with it", () => {
+  const service = read("Service.qml")
+  // follow = false is what keeps focus put; silent = true is not a real field.
+  assert.match(service, /follow = false/)
+  assert.match(service, /function handleWindowPlacement/)
+  // Placement is not a trigger, so it must not be gated on triggersEnabled.
+  const blocks = service.split("Connections {")
+  const placement = blocks.find((b) => b.includes("handleWindowPlacement"))
+  assert.ok(placement && !placement.includes("triggersEnabled"),
+    "placement must work with triggers off")
 })
 
 // ------------------------------------------------------------------ glyphs

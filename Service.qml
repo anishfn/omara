@@ -242,6 +242,53 @@ Item {
     return "uwsm-app -- gtk-launch " + Util.shellQuote(String(desktopId) + ".desktop")
   }
 
+  // Hyprland's exec rule follows the pid it spawned, which Chromium and friends
+  // drop when they re-exec. Remember where each launch was meant to land and
+  // move the window if it turns up somewhere else.
+  property var pendingPlacements: []
+
+  // Where the running mode meant to leave you. A window that shows up on the
+  // wrong workspace takes focus with it, so put focus back after moving it.
+  property string landingWorkspace: ""
+
+  function expectPlacement(keys, workspace) {
+    if (workspace === null || workspace === undefined) return
+    if (!Array.isArray(keys) || keys.length === 0) return
+    var list = Model.prunePlacements(service.pendingPlacements, Date.now())
+    list.push({ keys: keys, workspace: String(workspace), at: Date.now() })
+    service.pendingPlacements = list
+  }
+
+  function placeWindow(address, workspace) {
+    var addr = String(address || "").replace(/[^0-9a-fA-Fx]/g, "")
+    if (addr === "") return
+    if (addr.indexOf("0x") !== 0) addr = "0x" + addr
+    Hyprland.dispatch(Hyprland.usingLua
+      ? "hl.dsp.window.move({ window = \"address:" + addr + "\", workspace = "
+        + Model.luaQuote(String(workspace)) + ", follow = false })"
+      : "movetoworkspacesilent " + workspace + ",address:" + addr)
+  }
+
+  function handleWindowPlacement(data) {
+    if (service.pendingPlacements.length === 0) return
+    var parsed = Model.parseOpenWindowEvent(data)
+    if (!parsed) return
+    var now = Date.now()
+    var index = Model.matchPlacement(service.pendingPlacements, parsed.windowClass, now)
+    if (index < 0) {
+      service.pendingPlacements = Model.prunePlacements(service.pendingPlacements, now)
+      return
+    }
+    var wanted = String(service.pendingPlacements[index].workspace)
+    var list = service.pendingPlacements.slice()
+    list.splice(index, 1)
+    service.pendingPlacements = Model.prunePlacements(list, now)
+    if (String(parsed.workspace) === wanted) return
+    placeWindow(parsed.address, wanted)
+    log("info", "Moved " + parsed.windowClass + " to workspace " + wanted)
+    if (service.landingWorkspace !== "") focusWorkspace(service.landingWorkspace)
+  }
+
   // Placement without focus theft, so a mode can lay out several workspaces.
   function launchOnWorkspace(workspace, command) {
     var rule = Model.hyprlandExecRule(workspace, command)
@@ -258,6 +305,7 @@ Item {
     var where = workspace === null || workspace === undefined ? "" : " on workspace " + workspace
 
     if (where !== "") {
+      expectPlacement(Model.placementKeys(desktopId, "", entry.startupClass), workspace)
       launchOnWorkspace(workspace, desktopLaunchCommand(desktopId))
       return { ok: true, detail: "Launched " + name + where }
     }
@@ -280,6 +328,7 @@ Item {
     if (workspace !== null && workspace !== undefined) {
       var quoted = []
       for (var i = 0; i < parsed.argv.length; i++) quoted.push(Util.shellQuote(parsed.argv[i]))
+      expectPlacement(Model.placementKeys("", parsed.argv[0], ""), workspace)
       launchOnWorkspace(workspace, quoted.join(" "))
       return { ok: true, detail: "Launched " + parsed.argv[0] + " on workspace " + workspace }
     }
@@ -436,6 +485,9 @@ Item {
       var previous = Model.findMode(config, pending.previousModeId)
       results = results.concat(runPlan(Model.deactivationPlan(previous)))
     }
+
+    service.landingWorkspace = ctx.workspaces && ctx.workspaces.target !== null
+      && ctx.workspaces.target !== undefined ? String(ctx.workspaces.target) : ""
 
     captureSnapshot(ctx)
 
@@ -813,6 +865,15 @@ Item {
     function onRawEvent(event) {
       if (!event || String(event.name) !== "openwindow") return
       service.handleWindowOpened(event.data)
+    }
+  }
+
+  // Placement is not a trigger and stays on whether or not triggers are.
+  Connections {
+    target: Hyprland
+    function onRawEvent(event) {
+      if (!event || String(event.name) !== "openwindow") return
+      service.handleWindowPlacement(event.data)
     }
   }
 

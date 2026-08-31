@@ -463,10 +463,16 @@ function activationPlan(mode, options) {
   if (mode.appearance && mode.appearance.theme)
     steps.push({ kind: "theme", label: "Set theme", value: mode.appearance.theme })
 
-  if (mode.workspaces && mode.workspaces.target !== null && mode.workspaces.target !== undefined)
-    steps.push({ kind: "workspace", label: "Focus workspace", value: mode.workspaces.target })
+  var landing = mode.workspaces && mode.workspaces.target !== null && mode.workspaces.target !== undefined
+    ? mode.workspaces.target : null
+  var focusStep = landing === null ? null : { kind: "workspace", label: "Focus workspace", value: landing }
 
-  if (settingsOnly) return steps
+  // Focus goes last. An application that lands on the wrong workspace would
+  // otherwise drag you off the one the mode is supposed to leave you on.
+  if (settingsOnly) {
+    if (focusStep) steps.push(focusStep)
+    return steps
+  }
 
   if (opts.launchApps !== false) {
     var apps = Array.isArray(mode.applications) ? mode.applications : []
@@ -487,6 +493,8 @@ function activationPlan(mode, options) {
   var commands = (mode.commands && Array.isArray(mode.commands.onActivate)) ? mode.commands.onActivate : []
   for (var c = 0; c < commands.length; c++)
     steps.push({ kind: "commands", label: "Run " + commands[c], value: commands[c] })
+
+  if (focusStep) steps.push(focusStep)
 
   return steps
 }
@@ -631,6 +639,61 @@ function importModes(config, incoming, mode) {
 }
 
 // ---------------------------------------------------------------- triggers
+
+// --------------------------------------------------------- window placement
+
+// Hyprland places a window using the pid its exec rule spawned. Apps that fork
+// and re-exec, Chromium among them, hand the window to a different process and
+// land on the active workspace instead. So remember where each launch was meant
+// to go and move the window when it actually shows up.
+var PLACEMENT_TTL_MS = 25000
+
+function placementKeys(desktopId, command, startupClass) {
+  var keys = []
+  function add(value) {
+    var s = asString(value, "").trim().toLowerCase()
+    if (s === "") return
+    s = s.split("/").pop()
+    if (s.length >= 3 && keys.indexOf(s) === -1) keys.push(s)
+    // org.chromium.Chromium and chromium are the same app to a window class.
+    var tail = s.split(".").pop()
+    if (tail !== s && tail.length >= 3 && keys.indexOf(tail) === -1) keys.push(tail)
+  }
+  add(startupClass)
+  add(desktopId)
+  add(command)
+  return keys
+}
+
+function prunePlacements(pending, now) {
+  var out = []
+  var list = Array.isArray(pending) ? pending : []
+  for (var i = 0; i < list.length; i++) {
+    var p = list[i]
+    if (!isPlainObject(p)) continue
+    if (now - (Number(p.at) || 0) > PLACEMENT_TTL_MS) continue
+    out.push(p)
+  }
+  return out
+}
+
+function matchPlacement(pending, windowClass, now) {
+  var cls = asString(windowClass, "").trim().toLowerCase()
+  if (cls.length < 3) return -1
+  var list = Array.isArray(pending) ? pending : []
+  for (var i = 0; i < list.length; i++) {
+    var p = list[i]
+    if (!isPlainObject(p)) continue
+    if (now - (Number(p.at) || 0) > PLACEMENT_TTL_MS) continue
+    var keys = Array.isArray(p.keys) ? p.keys : []
+    for (var k = 0; k < keys.length; k++) {
+      var key = asString(keys[k], "").toLowerCase()
+      if (key.length < 3) continue
+      if (cls === key || cls.indexOf(key) !== -1 || key.indexOf(cls) !== -1) return i
+    }
+  }
+  return -1
+}
 
 function parseOpenWindowEvent(data) {
   var s = asString(data, "")
@@ -897,6 +960,10 @@ if (typeof module !== "undefined" && module.exports) {
     exportPayload: exportPayload,
     parseImport: parseImport,
     importModes: importModes,
+    PLACEMENT_TTL_MS: PLACEMENT_TTL_MS,
+    placementKeys: placementKeys,
+    prunePlacements: prunePlacements,
+    matchPlacement: matchPlacement,
     parseOpenWindowEvent: parseOpenWindowEvent,
     triggerMatches: triggerMatches,
     evaluateTrigger: evaluateTrigger,

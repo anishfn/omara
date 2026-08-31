@@ -69,10 +69,10 @@ Activating a mode can, in this order:
 | **Audio** | Switch the default output device |
 | **Wallpaper** | Set it, via Omarchy's own background command |
 | **Theme** | Switch it, via `omarchy theme set` |
-| **Workspace** | Focus the workspace the mode leaves you on |
 | **Windows** | Offer to close what is already open, gracefully, never killed |
 | **Applications** | Open them, each on the workspace you chose for it |
 | **Commands** | Run your own `onActivate` shell hooks |
+| **Workspace** | Land you on the workspace the mode names, once everything is up |
 
 Nothing is mandatory. Every field has a "leave it alone" state and that is the
 default, so a mode that only sets a workspace changes only the workspace.
@@ -321,6 +321,11 @@ A mode can lay out as many workspaces as you need.
 Anything else opens that app on that workspace, using Hyprland's own placement
 rules, so nothing drags your focus around while a mode starts up. Named
 workspaces work as well as numbers.
+
+Some applications, Chromium among them, hand their window to a different
+process than the one Hyprland launched, so the placement rule loses track of
+them. Omara watches for the window and moves it to the right workspace itself
+when that happens, without following it.
 
 **For the mode:** the *Workspace* field is simply where you are left once
 everything is running. Leave it blank to stay put.
