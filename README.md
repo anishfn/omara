@@ -689,6 +689,7 @@ after you fixed it, `omarchy-restart-shell` clears it.
 | `Service.qml` | Config file, runtime snapshot, activation, triggers, the `omara` IPC target, and the editor window. |
 | `BarWidget.qml` | Bar button and switcher popup. |
 | `ModeRow.qml` | One mode in a list. |
+| `OmaraMark.qml` | The bar mark, drawn as vector paths so it takes the theme's colour. |
 | `EditorWindow.qml` | The manage / edit overlay. |
 | `ModeForm.qml` | The edit form for one mode. |
 | `AppPicker.qml` | Installed-application picker, backed by the shell's `AppLibrary`. |

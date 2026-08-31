@@ -1,5 +1,4 @@
 import QtQuick
-import Quickshell
 import qs.Commons
 import qs.Ui
 import "Model.js" as Model
@@ -131,16 +130,11 @@ BarWidget {
       anchors.centerIn: parent
       spacing: Style.space(6)
 
-      Image {
+      OmaraMark {
         visible: root.showLogo
-        width: root.logoSize
-        height: root.logoSize
         anchors.verticalCenter: parent.verticalCenter
-        fillMode: Image.PreserveAspectFit
-        source: Qt.resolvedUrl("assets/omara.png")
-        sourceSize.width: root.logoSize * Screen.devicePixelRatio * 2
-        sourceSize.height: root.logoSize * Screen.devicePixelRatio * 2
-        asynchronous: true
+        iconSize: root.logoSize
+        color: root.foreground
       }
 
       Text {

@@ -538,6 +538,17 @@ test("no example modes ship: blank is the only template", () => {
     assert.ok(!source.includes('"' + name + '"'), name + " should not be offered as a template")
 })
 
+test("the bar mark is drawn in the theme's colour, not loaded as an image", () => {
+  const mark = read("OmaraMark.qml")
+  assert.match(mark, /import QtQuick\.Shapes/)
+  assert.match(mark, /property color color: Color\.foreground/)
+  const bar = read("BarWidget.qml")
+  assert.match(bar, /OmaraMark \{/)
+  assert.match(bar, /color: root\.foreground/)
+  // A PNG in the bar cannot follow the theme; the logo belongs in the README.
+  assert.ok(!/assets\/omara\.png/.test(bar), "the bar should not load the logo image")
+})
+
 // ------------------------------------------------------------ legacy names
 
 test("a config written under the old Contexts name is read, not dropped", () => {
