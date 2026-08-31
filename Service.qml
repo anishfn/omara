@@ -109,7 +109,7 @@ Item {
       service.configFileSeen = true
       service.loadConfig(text)
     }
-    onLoadFailed: if (!service.configLoaded) service.adoptLegacyConfig()
+    onLoadFailed: if (!service.configLoaded) service.loadConfig("")
   }
 
   property bool configFileSeen: false
@@ -131,27 +131,6 @@ Item {
     printErrors: false
     onLoaded: service.loadState(this.text())
     onLoadFailed: service.previousState = ({})
-  }
-
-  // Omara used to be called Contexts. Read the old file once if the new one is
-  // not there yet; the first save writes it out under the new name.
-  readonly property string legacyConfigPath: home + "/.config/omarchy/contexts.json"
-
-  function adoptLegacyConfig() {
-    legacyFile.reload()
-  }
-
-  FileView {
-    id: legacyFile
-    path: service.legacyConfigPath
-    watchChanges: false
-    printErrors: false
-    onLoaded: {
-      if (service.configLoaded) return
-      service.log("info", "Adopted " + service.legacyConfigPath + " from the old Contexts name")
-      service.loadConfig(this.text())
-    }
-    onLoadFailed: if (!service.configLoaded) service.loadConfig("")
   }
 
   function loadState(raw) {

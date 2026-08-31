@@ -249,11 +249,8 @@ function normalizeConfig(raw) {
   var uiDefaults = defaultUi()
   for (var uk in uiDefaults) config.ui[uk] = asBool(ui[uk], uiDefaults[uk])
 
-  // `contexts` / `activeContext` are what the plugin wrote when it was called
-  // Contexts. Read either spelling; only the new one is ever written back.
-  var rawList = raw.modes !== undefined ? raw.modes : raw.contexts
-  var list = Array.isArray(rawList) ? rawList : []
-  if (rawList !== undefined && !Array.isArray(rawList))
+  var list = Array.isArray(raw.modes) ? raw.modes : []
+  if (raw.modes !== undefined && !Array.isArray(raw.modes))
     warnings.push("`modes` was not a list; ignored.")
 
   var ids = []
@@ -267,7 +264,7 @@ function normalizeConfig(raw) {
     config.modes.push(ctx)
   }
 
-  var active = asString(raw.activeMode !== undefined ? raw.activeMode : raw.activeContext, "").trim()
+  var active = asString(raw.activeMode, "").trim()
   config.activeMode = (active !== "" && ids.indexOf(active) !== -1) ? active : null
   if (active !== "" && config.activeMode === null)
     warnings.push("Active mode \"" + active + "\" no longer exists; cleared.")
@@ -578,7 +575,6 @@ function parseImport(text) {
   var list = null
   if (Array.isArray(parsed)) list = parsed
   else if (isPlainObject(parsed) && Array.isArray(parsed.modes)) list = parsed.modes
-  else if (isPlainObject(parsed) && Array.isArray(parsed.contexts)) list = parsed.contexts
   else if (isPlainObject(parsed)) list = [parsed]
   if (!list) return { modes: [], error: "No modes found in the file." }
 

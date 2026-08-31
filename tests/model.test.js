@@ -549,42 +549,12 @@ test("the bar mark is drawn in the theme's colour, not loaded as an image", () =
   assert.ok(!/assets\/omara\.png/.test(bar), "the bar should not load the logo image")
 })
 
-// ------------------------------------------------------------ legacy names
-
-test("a config written under the old Contexts name is read, not dropped", () => {
-  const legacy = JSON.stringify({
-    version: 1,
-    activeContext: "coding",
-    contexts: [{ id: "coding", name: "Coding" }]
-  })
-  const parsed = Model.parseConfig(legacy)
-  assert.equal(parsed.config.modes.length, 1)
-  assert.equal(parsed.config.modes[0].id, "coding")
-  assert.equal(parsed.config.activeMode, "coding")
-})
-
-test("only the new key spelling is ever written back", () => {
-  const parsed = Model.parseConfig(JSON.stringify({ version: 1, contexts: [{ id: "a", name: "A" }] }))
-  const written = JSON.parse(Model.serializeConfig(parsed.config))
-  assert.ok(Array.isArray(written.modes))
-  assert.equal(written.contexts, undefined)
-  assert.equal(written.activeContext, undefined)
-})
-
-test("an export document from the old name still imports", () => {
-  const doc = JSON.stringify({ contexts: [{ id: "gaming", name: "Gaming" }] })
-  const result = Model.parseImport(doc)
-  assert.equal(result.error, "")
-  assert.equal(result.modes.length, 1)
-})
-
 test("nothing user-visible still says context", () => {
   for (const file of ["README.md", "manifest.json", "BarWidget.qml", "EditorWindow.qml",
     "ModeForm.qml", "ModeRow.qml", "Service.qml", "bin/omara"]) {
     const source = read(file)
     // The one allowed mention is reading the old config file by its old name.
-    const hits = source.split("\n").filter((line) => /\bcontexts?\b/i.test(line)
-      && !/contexts\.json|used to be called Contexts|old Contexts name/i.test(line))
+    const hits = source.split("\n").filter((line) => /\bcontexts?\b/i.test(line))
     assert.deepEqual(hits, [], file + " still says context")
   }
 })
