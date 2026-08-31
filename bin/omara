@@ -1,0 +1,142 @@
+#!/bin/bash
+
+# CLI for the Omara plugin.
+# Every subcommand forwards to the plugin's `omara` IPC target in the running
+# shell; the shell owns the config file, so nothing here writes to it directly.
+
+set -uo pipefail
+
+PROGRAM=${0##*/}
+
+usage() {
+  cat <<USAGE
+Usage: $PROGRAM <command> [args]
+
+Commands:
+  list                  List every mode as JSON
+  names                 List mode ids, one per line
+  current               Print the active mode id (empty if none)
+  status                Print a one-line summary
+  activate <id> [--close|--keep]
+                        Switch to a mode. --close closes the windows that
+                        are open first; --keep leaves them. Without either,
+                        the desktop asks.
+  deactivate            Turn the active mode off
+  menu                  Open the mode switcher popup in the bar
+  capture [name]        Make a mode out of the desktop as it is now
+  manage                Open the manage/edit panel
+  close                 Close the manage/edit panel
+  edit <id>             Open the editor on one mode
+  log                   Print what recent activations did
+  export [id]           Print an export document to stdout
+  reload                Re-read ~/.config/omarchy/omara.json
+  help                  Show this message
+
+Examples:
+  $PROGRAM capture "Right now"
+  $PROGRAM activate coding
+  $PROGRAM export > omara-export.json
+  $PROGRAM export gaming > gaming.json
+
+Bind whatever you like in your Hyprland config, for example:
+  bindd = SUPER, C, Omara, exec, $PROGRAM menu
+USAGE
+}
+
+fail() {
+  echo "$PROGRAM: $*" >&2
+  exit 1
+}
+
+require_shell() {
+  command -v omarchy-shell >/dev/null 2>&1 \
+    || fail "omarchy-shell not found; this command needs Omarchy 4.0"
+}
+
+# The shell reports IPC-level problems on stdout with exit 0, so check the text.
+call() {
+  local output
+  output=$(omarchy-shell omara "$@" 2>&1)
+  local status=$?
+  if ((status != 0)); then
+    case $output in
+      *"not running"* | *"not responding"* | *"not ready"*)
+        fail "omarchy-shell is not running"
+        ;;
+      *"Target not found"*)
+        fail "the Omara plugin is not enabled (omarchy plugin enable anishfn.omara)"
+        ;;
+    esac
+    fail "${output:-IPC call failed}"
+  fi
+  printf '%s\n' "$output"
+}
+
+require_shell
+
+case "${1:-help}" in
+  list)
+    call list
+    ;;
+  names)
+    call list | jq -r '.[].id'
+    ;;
+  current)
+    call current
+    ;;
+  status)
+    call show | jq -r '"active: \(.active // "none")  modes: \(.count)  triggers: \(if .triggersEnabled then "on" else "off" end)"'
+    ;;
+  activate)
+    [[ -n ${2:-} ]] || fail "usage: $PROGRAM activate <id> [--close|--keep]"
+    case ${3:-} in
+      "") result=$(call activate "$2") ;;
+      --close) result=$(call activateWindows "$2" close) ;;
+      --keep) result=$(call activateWindows "$2" keep) ;;
+      *) fail "unknown option \"$3\" (expected --close or --keep)" ;;
+    esac
+    [[ $result == "ok" ]] || fail "could not activate \"$2\" (is that a mode id? try \`$PROGRAM names\`)"
+    ;;
+  deactivate)
+    call deactivate >/dev/null
+    ;;
+  menu)
+    # The popup lives in the bar widget, so this goes through summon routing.
+    omarchy-shell shell toggle anishfn.omara >/dev/null \
+      || fail "could not open the mode menu"
+    ;;
+  capture)
+    result=$(call capture "${2:-}")
+    [[ $result == "ok" ]] || fail "a capture is already running"
+    ;;
+  manage)
+    call manage >/dev/null
+    ;;
+  close)
+    call close >/dev/null
+    ;;
+  edit)
+    [[ -n ${2:-} ]] || fail "usage: $PROGRAM edit <id>"
+    call edit "$2" >/dev/null
+    ;;
+  log)
+    call activity | jq -r 'reverse[] | (if .level == "warn" then "WARN  " else "      " end) + .message'
+    ;;
+  export)
+    if [[ -n ${2:-} ]]; then
+      call exportOne "$2"
+    else
+      call exportAll
+    fi
+    ;;
+  reload)
+    call reload >/dev/null
+    ;;
+  help | -h | --help)
+    usage
+    ;;
+  *)
+    usage >&2
+    exit 1
+    ;;
+esac
