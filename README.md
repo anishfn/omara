@@ -237,6 +237,8 @@ one, and you end up on the workspace you chose.
 
 ## Building a mode
 
+![The manage panel](preview.png)
+
 Right-click the bar widget, or run `omara manage`.
 
 The left pane lists your modes, the right pane edits the selected one.
