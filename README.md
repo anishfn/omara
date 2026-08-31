@@ -117,7 +117,7 @@ omarchy plugin list >/dev/null && echo "plugin support: ok"
 
 ```bash
 omarchy plugin add https://github.com/anishfn/omara.git
-omarchy plugin enable anishfn.omara --section left
+omarchy plugin enable io.github.anishfn.omara --section left
 ```
 
 Plugins land **disabled**, on purpose: a plugin is code that runs inside your
@@ -126,15 +126,15 @@ reading it.
 
 ```bash
 omarchy plugin add https://github.com/anishfn/omara.git
-$EDITOR ~/.config/omarchy/plugins/anishfn.omara     # read it
-omarchy plugin enable anishfn.omara --section left  # then run it
+$EDITOR ~/.config/omarchy/plugins/io.github.anishfn.omara     # read it
+omarchy plugin enable io.github.anishfn.omara --section left  # then run it
 ```
 
 `--section` takes `left`, `center`, or `right`. To put the widget next to
 something specific instead:
 
 ```bash
-omarchy plugin enable anishfn.omara --section right --before omarchy.clock
+omarchy plugin enable io.github.anishfn.omara --section right --before omarchy.clock
 ```
 
 ### From a local copy
@@ -144,15 +144,15 @@ No git remote needed. Any folder named after the plugin id under
 
 ```bash
 git clone https://github.com/anishfn/omara.git
-cp -r omara ~/.config/omarchy/plugins/anishfn.omara
-omarchy plugin enable anishfn.omara --section left
+cp -r omara ~/.config/omarchy/plugins/io.github.anishfn.omara
+omarchy plugin enable io.github.anishfn.omara --section left
 ```
 
 ### Check it worked
 
 ```bash
 omarchy plugin list | grep modes
-# anishfn.omara   enabled   third-party   bar-widget,service   Omara
+# io.github.anishfn.omara   enabled   third-party   bar-widget,service   Omara
 ```
 
 The widget appears in your bar immediately, reading `○ No mode`. If it does
@@ -165,7 +165,7 @@ keybindings:
 
 ```bash
 mkdir -p ~/.local/bin
-ln -sf ~/.config/omarchy/plugins/anishfn.omara/bin/omara \
+ln -sf ~/.config/omarchy/plugins/io.github.anishfn.omara/bin/omara \
   ~/.local/bin/omara
 omara status
 ```
@@ -176,7 +176,7 @@ Everything it does is also reachable without it, through
 ### Update
 
 ```bash
-omarchy plugin update anishfn.omara
+omarchy plugin update io.github.anishfn.omara
 ```
 
 Your modes live outside the plugin folder, so an update never touches them.
@@ -184,7 +184,7 @@ Your modes live outside the plugin folder, so an update never touches them.
 ### Uninstall
 
 ```bash
-omarchy plugin remove anishfn.omara
+omarchy plugin remove io.github.anishfn.omara
 ```
 
 That removes the plugin and its bar placement. Your modes are left behind in
@@ -204,7 +204,7 @@ desktop back the way it was.
 
 | Path | What |
 |---|---|
-| `~/.config/omarchy/plugins/anishfn.omara/` | the plugin itself |
+| `~/.config/omarchy/plugins/io.github.anishfn.omara/` | the plugin itself |
 | `~/.config/omarchy/omara.json` | your modes, safe to version-control |
 | `~/.local/state/omarchy/omara-state.json` | what to put back on *Disable mode* |
 
@@ -452,7 +452,7 @@ bindd = SUPER ALT, C, Manage modes, exec, omara manage
 Without the CLI on your `PATH`, go through the shell directly:
 
 ```
-bindd = SUPER, C, Omara, exec, omarchy-shell shell toggle anishfn.omara
+bindd = SUPER, C, Omara, exec, omarchy-shell shell toggle io.github.anishfn.omara
 ```
 
 ---
@@ -614,8 +614,8 @@ exploit.
 ## Troubleshooting
 
 **The widget is not in my bar.** `omarchy plugin list` should show
-`anishfn.omara` enabled. If not:
-`omarchy plugin enable anishfn.omara --section left`.
+`io.github.anishfn.omara` enabled. If not:
+`omarchy plugin enable io.github.anishfn.omara --section left`.
 
 **The CLI says the plugin is not enabled.** It talks to the running shell. Check
 `omarchy-shell shell ping`, then that the plugin is enabled.
@@ -681,7 +681,7 @@ external choosers, the IPC methods the CLI calls, and that every icon comes
 from the shared glyph map.
 
 To iterate against a live shell, work in
-`~/.config/omarchy/plugins/anishfn.omara/`, where saving any file reloads the
+`~/.config/omarchy/plugins/io.github.anishfn.omara/`, where saving any file reloads the
 plugin. QML is cached on disk, so if a stale compile error keeps reappearing
 after you fixed it, `omarchy-restart-shell` clears it.
 

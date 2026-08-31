@@ -64,7 +64,7 @@ call() {
         fail "omarchy-shell is not running"
         ;;
       *"Target not found"*)
-        fail "the Omara plugin is not enabled (omarchy plugin enable anishfn.omara)"
+        fail "the Omara plugin is not enabled (omarchy plugin enable io.github.anishfn.omara)"
         ;;
     esac
     fail "${output:-IPC call failed}"
@@ -102,7 +102,7 @@ case "${1:-help}" in
     ;;
   menu)
     # The popup lives in the bar widget, so this goes through summon routing.
-    omarchy-shell shell toggle anishfn.omara >/dev/null \
+    omarchy-shell shell toggle io.github.anishfn.omara >/dev/null \
       || fail "could not open the mode menu"
     ;;
   capture)
