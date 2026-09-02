@@ -69,6 +69,18 @@ Item {
     return ["timeout", "-k", "2", String(seconds)].concat(argv)
   }
 
+  // Actions are the other case, and they need the opposite default. Killing a
+  // producer is free — all we wanted was its output. Killing omarchy-theme-set
+  // half way through leaves a partly applied theme, which is worse than
+  // waiting, so an action is not killed at the reporting deadline: we stop
+  // waiting and say so, and it finishes on its own. The far backstop is only
+  // there so a genuinely wedged process cannot live forever.
+  readonly property int actionKillSec: 120
+
+  function boundedAction(argv) {
+    return ["timeout", "-k", "5", String(actionKillSec)].concat(argv)
+  }
+
   // ------------------------------------------------- supervised subprocesses
   //
   // Quickshell.execDetached hands back nothing: no start, no exit code, no
@@ -93,21 +105,26 @@ Item {
   // and output that is never collected is the only ceiling that cannot be
   // exceeded.
 
-  readonly property int actionDeadlineSec: 15
+  // Comfortably clear of three contending omarchy-theme-set runs, which take
+  // about six seconds each and serialise; a single switch never comes close.
+  readonly property int actionDeadlineSec: 30
 
   property int nextRunId: 1
   property var runRegistry: ({})
 
+  // The Process and its deadline need a common parent to live under, since a
+  // Process has no default property of its own to hold a Timer.
   Component {
     id: supervisedRun
 
-    Process {
+    Item {
       id: run
       property int runId: 0
       property string label: ""
+      property var argv: []
       property bool settled: false
 
-      onExited: function(exitCode) { run.finish(exitCode) }
+      function start() { proc.running = true }
 
       function finish(code) {
         if (run.settled) return
@@ -115,9 +132,15 @@ Item {
         runDeadline.stop()
         service.settleRun(run.runId, code === 0, code === 0 ? ""
           : ((code === 124 || code === 137)
-            ? run.label + " did not finish in " + service.actionDeadlineSec + "s"
+            ? run.label + " did not report back within " + service.actionDeadlineSec + "s"
             : run.label + " exited " + code))
         run.destroy()
+      }
+
+      Process {
+        id: proc
+        command: run.argv
+        onExited: function(exitCode) { run.finish(exitCode) }
       }
 
       // Second line behind `timeout`, for a child that is unkillable rather
@@ -127,10 +150,9 @@ Item {
         interval: (service.actionDeadlineSec + 3) * 1000
         repeat: false
         running: true
-        onTriggered: {
-          if (run.running) run.running = false
-          run.finish(124)
-        }
+        // Stop waiting, do not kill. The process keeps going and finishes its
+        // work; we have simply stopped holding a verdict open for it.
+        onTriggered: run.finish(124)
       }
     }
   }
@@ -143,13 +165,13 @@ Item {
     var name = String(label || (argv && argv[0]) || "command")
     service.runRegistry[id] = { settled: false, ok: true, detail: "", blocking: blocking !== false }
     var obj = supervisedRun.createObject(service, {
-      runId: id, label: name, command: bounded(actionDeadlineSec, argv)
+      runId: id, label: name, argv: boundedAction(argv)
     })
     if (!obj) {
       settleRun(id, false, name + " could not be started")
       return id
     }
-    obj.running = true
+    obj.start()
     return id
   }
 
@@ -268,9 +290,14 @@ Item {
     if (!stateOk && (!service.guardSettled || service.statePathOk))
       log("warn", "Not reading or writing omara-state.json: " + state.detail)
 
+    var firstSettle = !service.guardSettled
     service.configPathOk = configOk
     service.statePathOk = stateOk
     service.guardSettled = true
+
+    if (!firstSettle) return
+    if (stateOk) stateFile.reload()
+    if (configOk) configFile.reload()
   }
 
   // Refusing is not destructive: nothing on disk is touched, and `configLoaded`
@@ -320,8 +347,6 @@ Item {
       service.guardSettled = true
     }
   }
-
-  Component.onCompleted: service.checkPaths()
 
   // A reloaded or torn-down plugin must not leave children running. Every
   // Process here is bounded by `timeout` as well, so an escaped one still ends
@@ -807,9 +832,7 @@ Item {
     }
   }
 
-  // `activating` now comes down at the verdict, not at the end of the plan, so
-  // every path out of an activation has to release it. These are the early
-  // exits, which never got as far as starting anything to wait for.
+  // The early exits, which never got as far as issuing a plan to release.
   function abandonActivation() {
     service.activating = false
     service.pendingActivation = null
@@ -855,18 +878,23 @@ Item {
     service.lastActivationAt = Date.now()
     service.modesUpdated()
 
-    // The mode is active either way; what waits is the verdict. An activation
-    // must not announce success while the programs it needed are still trying
-    // to start, or have already failed to.
+    // The mode is active and its plan has been issued, so the next switch is
+    // free to start. What waits is the verdict, not the door: omarchy-theme-set
+    // alone takes about six seconds, and holding a switch closed for that long
+    // would make every theme change feel like a hang.
     var silent = pending.silent === true
+    service.activating = false
+    service.pendingActivation = null
+
+    // An activation must still not announce success while the programs it
+    // needed are failing, so the summary, the notification and the finished
+    // signal all wait for what actually happened.
     awaitRuns(results, function(outcome) {
       var summary = Model.summarize(ctx.name, outcome)
       log(summary.warnings > 0 ? "warn" : "info",
         "Activated " + ctx.name + (summary.warnings > 0 ? " with " + summary.warnings + " warning(s)" : ""))
       if (!silent) notifySummary(ctx, summary)
       service.activationFinished(ctx.id, summary.warnings)
-      service.activating = false
-      service.pendingActivation = null
     })
   }
 
@@ -877,43 +905,51 @@ Item {
   // both restore settings through the same functions, so both hand back the
   // same tokens and both would otherwise announce a result they do not have.
 
-  property var awaiting: null
-  property var awaitQueue: []
+  // Jobs are independent. Serialising them behind one slot meant a slow
+  // deactivation held an activation's verdict open behind it, and `activating`
+  // stayed true the whole time, so the next switch was refused as "already in
+  // flight" for something that had already finished its work.
+  property var awaitJobs: []
 
   function awaitRuns(results, done) {
     var ids = []
     for (var i = 0; i < results.length; i++)
       if (results[i] && results[i].run) ids.push(results[i].run)
-    var job = { results: results, ids: ids, done: done }
-    if (service.awaiting) service.awaitQueue = service.awaitQueue.concat([job])
-    else startAwait(job)
-  }
-
-  function startAwait(job) {
-    service.awaiting = job
-    if (job.ids.length > 0) awaitWatchdog.restart()
+    service.awaitJobs = service.awaitJobs.concat([
+      { results: results, ids: ids, done: done, at: Date.now() }
+    ])
+    if (!awaitSweep.running) awaitSweep.start()
     checkAwaiting()
   }
 
   function checkAwaiting() {
-    var a = service.awaiting
-    if (!a) return
-    for (var i = 0; i < a.ids.length; i++) {
-      var rec = service.runRegistry[a.ids[i]]
-      if (rec && !rec.settled) return
+    var jobs = service.awaitJobs
+    if (jobs.length === 0) return
+    var waiting = []
+    var ready = []
+
+    for (var j = 0; j < jobs.length; j++) {
+      var pending = false
+      for (var i = 0; i < jobs[j].ids.length; i++) {
+        var rec = service.runRegistry[jobs[j].ids[i]]
+        if (rec && !rec.settled) { pending = true; break }
+      }
+      if (pending) waiting.push(jobs[j])
+      else ready.push(jobs[j])
     }
-    finishAwait()
+
+    if (ready.length === 0) return
+    // Reassign before finishing: a done() that starts another job must append
+    // to the new list, not to one we are about to overwrite.
+    service.awaitJobs = waiting
+    for (var k = 0; k < ready.length; k++) finishJob(ready[k])
+    if (service.awaitJobs.length === 0) awaitSweep.stop()
   }
 
-  function finishAwait() {
-    var a = service.awaiting
-    if (!a) return
-    service.awaiting = null
-    awaitWatchdog.stop()
-
+  function finishJob(job) {
     // A step carrying a token was not logged when it ran. This is where it
     // gets its one line, and the line says what actually happened.
-    var results = a.results
+    var results = job.results
     for (var i = 0; i < results.length; i++) {
       var id = results[i] ? results[i].run : 0
       if (!id) continue
@@ -926,29 +962,29 @@ Item {
     }
 
     try {
-      if (typeof a.done === "function") a.done(results)
+      if (typeof job.done === "function") job.done(results)
     } catch (e) {
       log("warn", "Could not finish: " + (e && e.message ? e.message : "error"))
-      service.activating = false
-    }
-
-    if (service.awaitQueue.length > 0) {
-      var next = service.awaitQueue[0]
-      service.awaitQueue = service.awaitQueue.slice(1)
-      startAwait(next)
     }
   }
 
+  // One sweep for every job, so an action that never reports back cannot hold
+  // its own job open — or, now, anyone else's.
   Timer {
-    id: awaitWatchdog
-    interval: (service.actionDeadlineSec + 8) * 1000
-    repeat: false
+    id: awaitSweep
+    interval: 2000
+    repeat: true
     onTriggered: {
-      var a = service.awaiting
-      if (!a) return
-      for (var i = 0; i < a.ids.length; i++)
-        service.settleRun(a.ids[i], false, "an action never reported back")
-      service.finishAwait()
+      var now = Date.now()
+      var limit = (service.actionDeadlineSec + 8) * 1000
+      var jobs = service.awaitJobs
+      for (var j = 0; j < jobs.length; j++) {
+        if (now - jobs[j].at < limit) continue
+        for (var i = 0; i < jobs[j].ids.length; i++)
+          service.settleRun(jobs[j].ids[i], false, "an action never reported back")
+      }
+      service.checkAwaiting()
+      if (service.awaitJobs.length === 0) awaitSweep.stop()
     }
   }
 
@@ -1520,10 +1556,9 @@ Item {
 
   // ---------------------------------------------------------------- startup
 
-  Component.onCompleted: {
-    stateFile.reload()
-    configFile.reload()
-  }
+  // The guard runs first and the FileViews are read once it clears them, so
+  // there is nothing to reload here until then.
+  Component.onCompleted: service.checkPaths()
 
   property bool restoreAttempted: false
   onConfigLoadedChanged: {

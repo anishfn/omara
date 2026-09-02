@@ -22,6 +22,18 @@ test("every QML file parses", { skip: !hasQmllint() }, () => {
   }
 })
 
+// qmllint does not catch this one, and the shell reports it as
+// "Property value set multiple times" and refuses to load the plugin.
+test("no QML object declares the same handler twice", () => {
+  for (const file of qmlFiles) {
+    const src = read(file)
+    for (const handler of ["Component.onCompleted", "Component.onDestruction"]) {
+      const count = src.split(handler).length - 1
+      assert.ok(count <= 1, `${file} declares ${handler} ${count} times`)
+    }
+  }
+})
+
 function hasQmllint() {
   const { spawnSync } = require("node:child_process")
   return spawnSync("qmllint", ["--version"]).status === 0
@@ -973,10 +985,10 @@ test("an activation reports what happened, not what it asked for", () => {
   // Steps carry a token and are logged at the verdict, never optimistically.
   assert.match(qml, /function runSupervised\(argv, label, blocking\)/)
   assert.match(qml, /if \(!result\.run\) log\(result\.ok \? "info" : "warn", result\.detail\)/)
-  assert.match(qml, /function finishAwait/)
+  assert.match(qml, /function finishJob/)
   // activating comes down at the verdict, and every exit path releases it.
   assert.match(qml, /function abandonActivation/)
-  assert.match(qml, /id: awaitWatchdog/)
+  assert.match(qml, /id: awaitSweep/)
   // Deactivation restores settings through the same functions, so it waits too.
   assert.match(qml, /function deactivateMode[\s\S]*?awaitRuns\(results, function/)
   for (const fn of ["setTheme", "setWallpaper", "setDnd"])
@@ -1012,6 +1024,10 @@ test("the config path is checked before FileView is ever pointed at it", () => {
 test("no subprocess the service reads from runs without a deadline", () => {
   const qml = read("Service.qml")
   assert.match(qml, /function bounded\(seconds, argv\)[\s\S]*?"timeout", "-k", "2"/)
+  // Actions get a far backstop instead, because killing one mid-flight can
+  // leave a half-applied theme; the reporting deadline just stops waiting.
+  assert.match(qml, /function boundedAction\(argv\)[\s\S]*?actionKillSec/)
+  assert.match(qml, /onTriggered: run\.finish\(124\)/)
   // Every Process command in the service goes through bounded().
   for (const id of ["guardProcess", "probeProcess", "captureProcess", "themeProcess"])
     assert.match(qml, new RegExp(id + "\\.command = bounded\\("), id + " is unbounded")
