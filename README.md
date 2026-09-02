@@ -322,6 +322,12 @@ Anything else opens that app on that workspace, using Hyprland's own placement
 rules, so nothing drags your focus around while a mode starts up. Named
 workspaces work as well as numbers.
 
+A workspace ends up interpolated into a Hyprland dispatch, so the field takes
+Hyprland's own grammar and nothing else: an id (`3`), a relative step (`+1`,
+`e+1`, `m-1`, `r+1`), a keyword (`previous`, `emptynm`), a name (`project`,
+`name:Deep Work`), or a special (`special:magic`). Anything outside that is
+dropped when the mode is saved rather than sent to the compositor.
+
 Some applications, Chromium among them, hand their window to a different
 process than the one Hyprland launched, so the placement rule loses track of
 them. Omara watches for the window and moves it to the right workspace itself
@@ -605,6 +611,10 @@ collects telemetry, runs anything on install or import, writes outside
 - **`onActivate` / `onDeactivate`** *are* shell strings, deliberately. They run
   as you, through your login shell, exactly like a line in your own dotfiles.
   Treat them that way.
+- **Workspaces** are checked against Hyprland's grammar (`Model.isWorkspaceRef`)
+  before they go anywhere near a dispatch, and the Lua dispatch path quotes what
+  it sends. A workspace that does not fit the grammar is refused at the edge, at
+  save time, so no dispatch string is ever built from an arbitrary value.
 
 **Importing is the only place untrusted data arrives.** An imported file is
 parsed, normalized, and previewed, never applied on sight, and the preview names

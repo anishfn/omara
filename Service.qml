@@ -221,9 +221,11 @@ Item {
   }
 
   function focusWorkspace(target) {
-    var id = String(target)
+    var id = Model.workspaceRef(target)
+    if (id === "")
+      return { ok: false, detail: "\"" + String(target) + "\" is not a workspace Hyprland can name; skipped" }
     var command = Hyprland.usingLua
-      ? "hl.dsp.focus({ workspace = \"" + id.replace(/"/g, "") + "\" })"
+      ? "hl.dsp.focus({ workspace = " + Model.luaQuote(id) + " })"
       : "workspace " + id
     Hyprland.dispatch(command)
     return { ok: true, detail: "Workspace → " + id }
@@ -263,10 +265,14 @@ Item {
     var addr = String(address || "").replace(/[^0-9a-fA-Fx]/g, "")
     if (addr === "") return
     if (addr.indexOf("0x") !== 0) addr = "0x" + addr
+    // The keyword form is one comma-separated argument list, so a workspace
+    // that is not a workspace would read as extra arguments. Refuse it.
+    var target = Model.workspaceRef(workspace)
+    if (target === "") return
     Hyprland.dispatch(Hyprland.usingLua
       ? "hl.dsp.window.move({ window = \"address:" + addr + "\", workspace = "
-        + Model.luaQuote(String(workspace)) + ", follow = false })"
-      : "movetoworkspacesilent " + workspace + ",address:" + addr)
+        + Model.luaQuote(target) + ", follow = false })"
+      : "movetoworkspacesilent " + target + ",address:" + addr)
   }
 
   function handleWindowPlacement(data) {
@@ -290,6 +296,8 @@ Item {
   }
 
   // Placement without focus theft, so a mode can lay out several workspaces.
+  // The rule refuses a workspace outside Hyprland's grammar, in which case the
+  // application still launches, just wherever you happen to be.
   function launchOnWorkspace(workspace, command) {
     var rule = Model.hyprlandExecRule(workspace, command)
     Hyprland.dispatch(Hyprland.usingLua
@@ -302,6 +310,8 @@ Item {
     if (!entry)
       return { ok: false, detail: "\"" + desktopId + "\" is not installed; skipped" }
     var name = String(entry.name || desktopId)
+    if (workspace !== null && workspace !== undefined && Model.workspaceRef(workspace) === "")
+      return { ok: false, detail: "\"" + String(workspace) + "\" is not a workspace Hyprland can name; skipped" }
     var where = workspace === null || workspace === undefined ? "" : " on workspace " + workspace
 
     if (where !== "") {
@@ -326,6 +336,8 @@ Item {
       return { ok: false, detail: "Unbalanced quote in \"" + command + "\"" }
 
     if (workspace !== null && workspace !== undefined) {
+      if (Model.workspaceRef(workspace) === "")
+        return { ok: false, detail: "\"" + String(workspace) + "\" is not a workspace Hyprland can name; skipped" }
       var quoted = []
       for (var i = 0; i < parsed.argv.length; i++) quoted.push(Util.shellQuote(parsed.argv[i]))
       expectPlacement(Model.placementKeys("", parsed.argv[0], ""), workspace)
@@ -486,8 +498,8 @@ Item {
       results = results.concat(runPlan(Model.deactivationPlan(previous)))
     }
 
-    service.landingWorkspace = ctx.workspaces && ctx.workspaces.target !== null
-      && ctx.workspaces.target !== undefined ? String(ctx.workspaces.target) : ""
+    service.landingWorkspace = ctx.workspaces
+      ? Model.workspaceRef(ctx.workspaces.target) : ""
 
     captureSnapshot(ctx)
 

@@ -191,9 +191,34 @@ test("placement rides as a Hyprland exec rule, and only when asked for", () => {
   assert.equal(Model.hyprlandExecRule(undefined, "alacritty"), "alacritty")
 })
 
-test("a workspace name cannot break out of the rule it is interpolated into", () => {
-  assert.equal(Model.hyprlandExecRule('1] evil [x', "app"), "[workspace 1 evil x silent] app")
-  assert.doesNotMatch(Model.hyprlandExecRule('a"b\nc', "app"), /["\n]/)
+test("a workspace outside Hyprland's grammar is refused, not patched up", () => {
+  assert.ok(Model.isWorkspaceRef(3))
+  assert.ok(Model.isWorkspaceRef("+1"))
+  assert.ok(Model.isWorkspaceRef("e+1"))
+  assert.ok(Model.isWorkspaceRef("m-1"))
+  assert.ok(Model.isWorkspaceRef("previous"))
+  assert.ok(Model.isWorkspaceRef("special:magic"))
+  assert.ok(Model.isWorkspaceRef("name:Deep Work"))
+  assert.ok(Model.isWorkspaceRef("project"))
+
+  assert.equal(Model.isWorkspaceRef('1] evil [x'), false)
+  assert.equal(Model.isWorkspaceRef("1,address:0xdead"), false)
+  assert.equal(Model.isWorkspaceRef('a"b\nc'), false)
+  assert.equal(Model.isWorkspaceRef("1; exec evil"), false)
+  assert.equal(Model.isWorkspaceRef("$(id)"), false)
+  assert.equal(Model.isWorkspaceRef("x".repeat(64)), false)
+  assert.equal(Model.isWorkspaceRef(""), false)
+
+  assert.equal(Model.workspaceRef("2"), "2")
+  assert.equal(Model.workspaceRef('1] evil [x'), "")
+})
+
+test("a workspace that cannot be dispatched never reaches a dispatch string", () => {
+  assert.equal(Model.hyprlandExecRule('1] evil [x', "app"), "app")
+  assert.equal(Model.hyprlandExecRule("1,address:0xdead", "app"), "app")
+  assert.equal(Model.asWorkspace('1] evil [x'), null)
+  assert.equal(Model.asWorkspace("special:magic"), "special:magic")
+  assert.equal(Model.normalizeApplication({ command: "x", workspace: "1;evil" }).workspace, null)
 })
 
 test("a command cannot break out of the Lua string it is dispatched in", () => {
@@ -827,4 +852,15 @@ test("application launches never hand a user string to a shell for parsing", () 
   const qml = read("Service.qml")
   assert.match(qml, /exec "\$@"/)
   assert.doesNotMatch(qml, /execDetached\(\["bash", "-lc", parsed/)
+})
+
+test("every workspace dispatch is built from a validated reference", () => {
+  const qml = read("Service.qml")
+  // No dispatch site may interpolate a raw workspace: each one goes through
+  // Model.workspaceRef first, and the Lua path quotes what it gets.
+  assert.match(qml, /function focusWorkspace[\s\S]*?Model\.workspaceRef\(target\)/)
+  assert.match(qml, /function placeWindow[\s\S]*?Model\.workspaceRef\(workspace\)/)
+  assert.doesNotMatch(qml, /"workspace " \+ workspace/)
+  assert.doesNotMatch(qml, /movetoworkspacesilent " \+ workspace/)
+  assert.doesNotMatch(qml, /id\.replace\(/)
 })

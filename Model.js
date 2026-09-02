@@ -46,13 +46,32 @@ function asBool(value, fallback) {
   return t === null ? fallback === true : t
 }
 
+// Hyprland's own workspace grammar: an id, a relative step, or a name. A
+// workspace ends up interpolated into a dispatch string, so anything outside
+// the grammar is refused here, at the edge, instead of being patched up later.
+var WORKSPACE_STEP = /^[mre]?[+-]?~?\d{1,6}$/
+var WORKSPACE_NAME = /^(?:(?:name|special):)?[A-Za-z0-9][A-Za-z0-9 ._-]{0,31}$/
+
+function isWorkspaceRef(value) {
+  if (typeof value === "number") return isFinite(value)
+  var s = asString(value, "").trim()
+  if (s === "" || s.length > 40) return false
+  return WORKSPACE_STEP.test(s) || WORKSPACE_NAME.test(s)
+}
+
+// The string a dispatch may carry, or "" for "there is nothing safe to send".
+// Callers read "" as "no workspace" rather than guessing at what was meant.
+function workspaceRef(value) {
+  return isWorkspaceRef(value) ? String(value).trim() : ""
+}
+
 function asWorkspace(value) {
   if (value === undefined || value === null || value === "") return null
   if (typeof value === "number" && isFinite(value)) return Math.round(value)
   var s = String(value).trim()
   if (s === "") return null
   if (/^-?\d+$/.test(s)) return parseInt(s, 10)
-  return s
+  return isWorkspaceRef(s) ? s : null
 }
 
 function asStringList(value) {
@@ -427,19 +446,24 @@ function parseArgv(command) {
   return { argv: argv, unterminated: quote !== "" }
 }
 
-// Hyprland places a window with an exec rule; `silent` leaves focus alone.
-// Control characters are dropped from the workspace, which is interpolated raw.
+// Hyprland places a window with an exec rule; `silent` leaves focus alone. The
+// workspace is interpolated raw, so it has to clear isWorkspaceRef first. One
+// that does not launches the application unplaced instead of shaping the rule.
 function hyprlandExecRule(workspace, command) {
-  var target = String(workspace === null || workspace === undefined ? "" : workspace)
-    .replace(/[\r\n\t"'\[\]\\]/g, "")
-    .trim()
+  var target = workspaceRef(workspace)
   var payload = String(command || "")
   if (target === "") return payload
   return "[workspace " + target + " silent] " + payload
 }
 
+// A Lua string literal for the keyword dispatch path. A bare newline is a
+// syntax error there, not just an odd name, so it is escaped like the rest.
 function luaQuote(value) {
-  return '"' + String(value || "").replace(/\\/g, "\\\\").replace(/"/g, '\\"') + '"'
+  return '"' + String(value || "")
+    .replace(/\\/g, "\\\\")
+    .replace(/"/g, '\\"')
+    .replace(/\n/g, "\\n")
+    .replace(/\r/g, "\\r") + '"'
 }
 
 // ------------------------------------------------------------ activation
@@ -937,6 +961,8 @@ if (typeof module !== "undefined" && module.exports) {
     applicationLabel: applicationLabel,
     hyprlandExecRule: hyprlandExecRule,
     luaQuote: luaQuote,
+    isWorkspaceRef: isWorkspaceRef,
+    workspaceRef: workspaceRef,
     normalizeMode: normalizeMode,
     defaultConfig: defaultConfig,
     normalizeConfig: normalizeConfig,
