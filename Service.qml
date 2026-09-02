@@ -57,6 +57,18 @@ Item {
     service.logged()
   }
 
+  // --------------------------------------------------- subprocess boundaries
+
+  // Every producer this service reads from runs under a deadline enforced
+  // outside the shell. `timeout` puts the child in its own process group and
+  // sends TERM, then KILL after the grace period, so a wedged tool cannot
+  // outlive the wait or leave the group orphaned. The QML watchdogs beside
+  // each Process are the second line, for a child that is unkillable rather
+  // than merely slow: they release whatever was waiting on it.
+  function bounded(seconds, argv) {
+    return ["timeout", "-k", "2", String(seconds)].concat(argv)
+  }
+
   // ------------------------------------------------------------ persistence
 
   function applyConfig(next, reason) {
@@ -427,43 +439,71 @@ Item {
         if (key !== "") binaries.push(key)
       }
     }
-    probeProcess.command = ["bash", "-lc", probeScript, "bash"].concat(binaries)
+    // Supersession: one probe at a time. A leftover from an activation that
+    // never settled is killed rather than raced against.
+    if (probeProcess.running) probeProcess.running = false
+    service.probeSettled = false
+    probeProcess.command = bounded(probeDeadlineSec,
+      ["bash", "-lc", probeScript, "bash"].concat(binaries.slice(0, probeMaxBinaries)))
     probeProcess.running = true
+    probeWatchdog.restart()
   }
 
   // One subprocess per activation: the environment to snapshot, plus which of
   // the configured commands actually exist.
+  //
+  // Every producer here is capped at the source. `theme.name` in particular is
+  // read with `head -c`, not `cat`: if that path is a FIFO the read still
+  // blocks, which is what the enclosing `timeout` is for.
+  readonly property int probeDeadlineSec: 10
+  readonly property int probeMaxBinaries: 256
   readonly property string probeScript:
-    'printf \'WALLPAPER\\t%s\\n\' "$(readlink -f "$HOME/.local/state/omarchy/current/background" 2>/dev/null)"\n' +
-    'printf \'THEME\\t%s\\n\' "$(cat "$HOME/.local/state/omarchy/current/theme.name" 2>/dev/null)"\n' +
+    'ws=$(readlink -f "$HOME/.local/state/omarchy/current/background" 2>/dev/null | head -c 4096)\n' +
+    'printf \'WALLPAPER\\t%s\\n\' "$ws"\n' +
+    'th=$(head -c 256 "$HOME/.local/state/omarchy/current/theme.name" 2>/dev/null | head -n 1)\n' +
+    'printf \'THEME\\t%s\\n\' "$th"\n' +
+    'n=0\n' +
     'for bin in "$@"; do\n' +
-    '  if command -v -- "$bin" >/dev/null 2>&1; then printf \'APP\\tok\\t%s\\n\' "$bin"\n' +
-    '  else printf \'APP\\tmissing\\t%s\\n\' "$bin"; fi\n' +
+    '  n=$((n + 1)); [ "$n" -gt 256 ] && break\n' +
+    '  b=$(printf %s "$bin" | head -c 256)\n' +
+    '  if command -v -- "$b" >/dev/null 2>&1; then printf \'APP\\tok\\t%s\\n\' "$b"\n' +
+    '  else printf \'APP\\tmissing\\t%s\\n\' "$b"; fi\n' +
     'done\n'
 
-  property var probeResult: ({ wallpaper: "", theme: "", missing: ({}) })
+  property var probeResult: Model.emptyProbeResult()
+  property bool probeSettled: false
 
-  function parseProbe(text) {
-    var out = { wallpaper: "", theme: "", missing: ({}) }
-    var lines = String(text || "").split("\n")
-    for (var i = 0; i < lines.length; i++) {
-      var parts = lines[i].split("\t")
-      if (parts[0] === "WALLPAPER") out.wallpaper = parts[1] || ""
-      else if (parts[0] === "THEME") out.theme = parts[1] || ""
-      else if (parts[0] === "APP" && parts[1] === "missing") out.missing[parts[2] || ""] = true
-    }
-    return out
+  // Exit and deadline both land here, and only the first one counts. A probe
+  // that never settled would leave `activating` stuck and refuse every future
+  // switch, so the deadline has to be able to finish the activation itself.
+  function settleProbe(warning) {
+    if (service.probeSettled) return
+    service.probeSettled = true
+    probeWatchdog.stop()
+    if (warning) log("warn", warning)
+    service.finishActivation()
   }
 
   Process {
     id: probeProcess
     stdout: StdioCollector {
       waitForEnd: true
-      onStreamFinished: service.probeResult = service.parseProbe(text)
+      onStreamFinished: service.probeResult = Model.parseProbeOutput(text)
     }
     onExited: function(exitCode) {
-      if (exitCode !== 0) service.log("warn", "Environment probe exited " + exitCode + "; continuing without a restore snapshot")
-      service.finishActivation()
+      service.settleProbe(exitCode === 0 ? ""
+        : "Environment probe exited " + exitCode + "; continuing without a restore snapshot")
+    }
+  }
+
+  Timer {
+    id: probeWatchdog
+    interval: (service.probeDeadlineSec + 3) * 1000
+    repeat: false
+    onTriggered: {
+      if (probeProcess.running) probeProcess.running = false
+      service.settleProbe("Environment probe did not finish in "
+        + service.probeDeadlineSec + "s; continuing without a restore snapshot")
     }
   }
 
@@ -746,14 +786,22 @@ Item {
 
   property var themes: []
 
+  // `-L` stays: Omarchy themes are routinely symlinked directories, and
+  // dropping it would empty the picker for anyone who installs them that way.
+  // `-maxdepth 1` is what makes following safe — the scan only ever stats the
+  // immediate children of two known roots, so it cannot recurse or loop. The
+  // count and byte caps bound the result, and `timeout` bounds the wait.
+  readonly property int themeDeadlineSec: 10
   readonly property string themeScript:
     'find -L "$OMARCHY_PATH/themes" "$HOME/.config/omarchy/themes" ' +
-    '-mindepth 1 -maxdepth 1 -type d -printf \'%f\\n\' 2>/dev/null | sort -u\n'
+    '-mindepth 1 -maxdepth 1 -type d -printf \'%f\\n\' 2>/dev/null ' +
+    '| head -n 512 | head -c 65536 | sort -u\n'
 
   function refreshThemes() {
     if (themeProcess.running) return
-    themeProcess.command = ["bash", "-lc", themeScript]
+    themeProcess.command = bounded(themeDeadlineSec, ["bash", "-lc", themeScript])
     themeProcess.running = true
+    themeWatchdog.restart()
   }
 
   Process {
@@ -761,6 +809,18 @@ Item {
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: service.themes = Model.themeList(String(text || "").split("\n"))
+    }
+    onExited: themeWatchdog.stop()
+  }
+
+  Timer {
+    id: themeWatchdog
+    interval: (service.themeDeadlineSec + 3) * 1000
+    repeat: false
+    onTriggered: {
+      if (!themeProcess.running) return
+      themeProcess.running = false
+      service.log("warn", "Theme scan did not finish in " + service.themeDeadlineSec + "s; kept the previous list")
     }
   }
 
@@ -771,18 +831,41 @@ Item {
   function captureCurrentSetup(name) {
     if (captureProcess.running) return false
     service.captureName = String(name || "")
-    captureProcess.command = ["bash", "-lc", probeScript, "bash"]
+    service.captureSettled = false
+    captureProcess.command = bounded(probeDeadlineSec, ["bash", "-lc", probeScript, "bash"])
     captureProcess.running = true
+    captureWatchdog.restart()
     return true
+  }
+
+  property bool captureSettled: false
+
+  function settleCapture(warning) {
+    if (service.captureSettled) return
+    service.captureSettled = true
+    captureWatchdog.stop()
+    if (warning) log("warn", warning)
+    service.finishCapture()
   }
 
   Process {
     id: captureProcess
     stdout: StdioCollector {
       waitForEnd: true
-      onStreamFinished: service.probeResult = service.parseProbe(text)
+      onStreamFinished: service.probeResult = Model.parseProbeOutput(text)
     }
-    onExited: service.finishCapture()
+    onExited: service.settleCapture("")
+  }
+
+  Timer {
+    id: captureWatchdog
+    interval: (service.probeDeadlineSec + 3) * 1000
+    repeat: false
+    onTriggered: {
+      if (captureProcess.running) captureProcess.running = false
+      service.settleCapture("Capture probe did not finish in "
+        + service.probeDeadlineSec + "s; captured what was already known")
+    }
   }
 
   function finishCapture() {

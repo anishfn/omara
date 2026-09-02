@@ -892,6 +892,38 @@ test("application launches never hand a user string to a shell for parsing", () 
   assert.doesNotMatch(qml, /execDetached\(\["bash", "-lc", parsed/)
 })
 
+test("probe output is bounded and cannot inherit from Object.prototype", () => {
+  const probe = Model.parseProbeOutput(
+    "WALLPAPER\t/home/a/bg.jpg\nTHEME\tgruvbox\nAPP\tmissing\tsteam\nAPP\tok\tghostty\n")
+  assert.equal(probe.wallpaper, "/home/a/bg.jpg")
+  assert.equal(probe.theme, "gruvbox")
+  assert.equal(probe.missing.steam, true)
+  assert.equal(probe.missing.ghostty, undefined)
+
+  // The lookup is `missing[name] === true`, so a command sharing a name with
+  // something on Object.prototype must not come back truthy.
+  assert.equal(probe.missing.toString, undefined)
+  assert.equal(probe.missing.constructor, undefined)
+  assert.equal(probe.missing.hasOwnProperty, undefined)
+  assert.equal(Object.getPrototypeOf(probe.missing), null)
+
+  // A producer that ignores its own ceilings does not get to set ours.
+  const flood = Array.from({ length: 5000 }, (_, i) => `APP\tmissing\tapp${i}`).join("\n")
+  assert.ok(Object.keys(Model.parseProbeOutput(flood).missing).length <= 512)
+  const huge = Model.parseProbeOutput("WALLPAPER\t" + "x".repeat(200000))
+  assert.ok(huge.wallpaper.length <= 4096)
+
+  // A closed record: three known keys, whatever the output says.
+  assert.deepEqual(Object.keys(Model.parseProbeOutput("EVIL\tx\nWALLPAPER\ta")).sort(),
+    ["missing", "theme", "wallpaper"])
+})
+
+test("a theme directory cannot vanish by sharing a name with a prototype key", () => {
+  const themes = Model.themeList(["gruvbox", "constructor", "toString", "gruvbox"])
+  assert.deepEqual(themes.map(t => t.slug).sort(), ["constructor", "gruvbox", "toString"])
+  assert.ok(Model.themeList(Array.from({ length: 5000 }, (_, i) => "t" + i)).length <= 512)
+})
+
 test("the import pane shows the lines it would run before anything is imported", () => {
   const qml = read("EditorWindow.qml")
   assert.match(qml, /Model\.importPreview/)

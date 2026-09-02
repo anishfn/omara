@@ -717,6 +717,48 @@ function importModes(config, incoming, mode) {
   return { config: next, added: added, replaced: replaced, skipped: skipped }
 }
 
+// ------------------------------------------------------------ probe output
+
+// Ceilings on what a subprocess may hand back. The producers are bounded at
+// the source too, but a parser that trusts its input to respect its own limits
+// is not applying a limit.
+var PROBE_MAX_BYTES = 65536
+var PROBE_MAX_LINES = 512
+var PROBE_MAX_ITEMS = 512
+var PROBE_MAX_FIELD = 4096
+
+function probeField(value) {
+  var s = typeof value === "string" ? value : ""
+  return s.length > PROBE_MAX_FIELD ? s.slice(0, PROBE_MAX_FIELD) : s
+}
+
+// A closed record: three known keys, and nothing the output can add to them.
+// `missing` is null-prototype because the lookup is `missing[name] === true` —
+// on a plain object a command called `toString` or `valueOf` would come back
+// truthy off the prototype chain and be reported as not installed.
+function parseProbeOutput(text) {
+  var out = { wallpaper: "", theme: "", missing: Object.create(null) }
+  var raw = typeof text === "string" ? text : String(text === undefined || text === null ? "" : text)
+  if (raw.length > PROBE_MAX_BYTES) raw = raw.slice(0, PROBE_MAX_BYTES)
+
+  var lines = raw.split("\n")
+  var limit = lines.length < PROBE_MAX_LINES ? lines.length : PROBE_MAX_LINES
+  for (var i = 0; i < limit; i++) {
+    var parts = lines[i].split("\t")
+    if (parts[0] === "WALLPAPER") out.wallpaper = probeField(parts[1])
+    else if (parts[0] === "THEME") out.theme = probeField(parts[1])
+    else if (parts[0] === "APP" && parts[1] === "missing") {
+      var name = probeField(parts[2])
+      if (name !== "") out.missing[name] = true
+    }
+  }
+  return out
+}
+
+function emptyProbeResult() {
+  return { wallpaper: "", theme: "", missing: Object.create(null) }
+}
+
 // ---------------------------------------------------------------- triggers
 
 // --------------------------------------------------------- window placement
@@ -931,12 +973,15 @@ function prettyThemeName(slug) {
 }
 
 function themeList(slugs) {
-  var seen = {}
+  // Null-prototype: a theme directory called `constructor` or `toString` would
+  // otherwise read as already-seen off the prototype chain and vanish.
+  var seen = Object.create(null)
   var out = []
   var list = Array.isArray(slugs) ? slugs : []
-  for (var i = 0; i < list.length; i++) {
+  var limit = list.length < PROBE_MAX_ITEMS ? list.length : PROBE_MAX_ITEMS
+  for (var i = 0; i < limit; i++) {
     var slug = String(list[i] || "").trim()
-    if (slug === "" || seen[slug]) continue
+    if (slug === "" || slug.length > PROBE_MAX_FIELD || seen[slug]) continue
     seen[slug] = true
     out.push({ slug: slug, name: prettyThemeName(slug) })
   }
@@ -1046,6 +1091,8 @@ if (typeof module !== "undefined" && module.exports) {
     disarmImportedTriggers: disarmImportedTriggers,
     PLACEMENT_TTL_MS: PLACEMENT_TTL_MS,
     placementKeys: placementKeys,
+    parseProbeOutput: parseProbeOutput,
+    emptyProbeResult: emptyProbeResult,
     prunePlacements: prunePlacements,
     matchPlacement: matchPlacement,
     parseOpenWindowEvent: parseOpenWindowEvent,
