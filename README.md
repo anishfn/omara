@@ -369,9 +369,14 @@ unchanged* is always at the top right.
 ### Commands
 
 Under **Advanced**. `onActivate` runs when the mode switches on,
-`onDeactivate` when it switches off. These are shell strings, so pipelines and
-redirects work. That is the reason to write one instead of adding an
-application.
+`onDeactivate` when it switches off.
+
+These are shell strings, run as `bash -lc '<your string>'` — a login shell, so
+your `~/.bash_profile` and `PATH` apply, and pipelines, redirects, `&&` and
+substitution all work. That is the reason to write one instead of adding an
+application, and it is also the whole of the trust you are extending: the string
+is not parsed, escaped, or restricted by Omara, and a line here can do anything
+you can do at a prompt. It is the one field in Omara that works this way.
 
 Omara does not guess at inverses. If a command changes something you want put
 back, write the inverse yourself:
@@ -620,12 +625,14 @@ collects telemetry, runs anything on install or import, writes outside
   own launcher. Nothing in the mode is interpreted as a command; the
   `.desktop` file already on your system decides what runs.
 - **Custom commands** are tokenized like a shell would (quotes honoured) and run
-  as an argv vector through `exec "$@"`. Every token stays one positional
-  parameter, so a filename, URL, or `$(...)` inside an argument is literal data
-  and can never become a second command.
-- **`onActivate` / `onDeactivate`** *are* shell strings, deliberately. They run
-  as you, through your login shell, exactly like a line in your own dotfiles.
-  Treat them that way.
+  as an argv vector through `bash -lc 'exec "$@"' bash <argv...>`. The script is
+  a constant; your tokens are positional parameters. A filename, URL, or `$(...)`
+  inside an argument is literal data and can never become a second command.
+- **`onActivate` / `onDeactivate`** *are* shell strings, deliberately, and the
+  only ones. They run as `bash -lc '<your string>'` — as you, through your login
+  shell, exactly like a line in your own dotfiles. Nothing quotes or restricts
+  them, because a hook that cannot use a pipe is not worth having. Treat a mode
+  file the way you would treat a `.bashrc` someone sent you.
 - **Workspaces** are checked against Hyprland's grammar (`Model.isWorkspaceRef`)
   before they go anywhere near a dispatch, and the Lua dispatch path quotes what
   it sends. A workspace that does not fit the grammar is refused at the edge, at
