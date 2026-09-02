@@ -414,6 +414,11 @@ trigger watches for. Three rules break that:
 2. any trigger within 8 seconds of an activation is ignored
 3. a disabled trigger or mode never fires
 
+**Switch** is a standing permission to run a mode without asking, so it is not
+something a file can hand itself: an imported trigger always arrives as **Ask**,
+however it was written — including **Default**, which would otherwise follow
+your *Ask before switching* setting. Promote it once you have read the mode.
+
 ---
 
 ## Turning a mode off
@@ -510,10 +515,20 @@ mode to stdout:
 omara export gaming > gaming.json
 ```
 
-**Import** previews the file first and warns when the incoming modes carry
-applications or commands, because activating one will run them as you. If an id
-already exists you choose **Create copy**, the only option that cannot lose what
-you already have, or **Replace existing**.
+**Import** previews the file first. The preview lists the *exact lines* each
+incoming mode would run — every application and every `onActivate` /
+`onDeactivate` string, verbatim — because "this mode runs some commands" is a
+count, and a count is not consent. Read them before you press a button; nothing
+in the file runs while you are looking at it.
+
+Two things the file does not get to decide for you:
+
+- **automatic triggers** come in as **Ask** — including **Default** — so an
+  imported mode can never activate itself
+- **nothing runs on import**, only on the activation you choose
+
+If an id already exists you choose **Create copy**, the only option that cannot
+lose what you already have, or **Replace existing**.
 
 ---
 
@@ -617,9 +632,11 @@ collects telemetry, runs anything on install or import, writes outside
   save time, so no dispatch string is ever built from an arbitrary value.
 
 **Importing is the only place untrusted data arrives.** An imported file is
-parsed, normalized, and previewed, never applied on sight, and the preview names
-every mode carrying something executable. Nothing runs until you activate
-that mode.
+parsed, normalized, and previewed, never applied on sight. The preview shows the
+exact command lines each mode would run, not a count of them, and every imported
+trigger is pinned to *ask* — *auto* and *default* alike — so an imported mode
+cannot activate itself on any machine's settings. Nothing runs until you
+activate that mode.
 
 Found a problem? Open an issue describing the class of issue, not a working
 exploit.

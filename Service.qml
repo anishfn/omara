@@ -862,6 +862,9 @@ Item {
     if (parsed.error) { log("warn", "Import failed: " + parsed.error); return { ok: false, error: parsed.error } }
     var result = Model.importModes(service.config, parsed.modes, mode)
     applyConfig(result.config, "Imported " + (result.added.length + result.replaced.length) + " mode(s)")
+    if (parsed.disarmed > 0)
+      log("warn", "Set " + parsed.disarmed + " imported trigger(s) back to asking; "
+        + "an imported file does not get to run a mode on its own")
     return { ok: true, added: result.added, replaced: result.replaced, skipped: result.skipped }
   }
 

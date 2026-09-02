@@ -582,6 +582,59 @@ function modeHasCommands(mode) {
   return Array.isArray(mode.applications) && mode.applications.length > 0
 }
 
+// Every program an imported mode would run, written the way it would run it.
+// The preview lists these verbatim: "3 modes, some of which run programs" is a
+// count, and a count is not consent.
+function importRuns(mode) {
+  var out = []
+  if (!isPlainObject(mode)) return out
+  var apps = Array.isArray(mode.applications) ? mode.applications : []
+  for (var i = 0; i < apps.length; i++) {
+    var app = apps[i]
+    if (!isPlainObject(app)) continue
+    if (app.desktopId) out.push("app  " + app.desktopId + ".desktop")
+    else if (app.command) out.push("app  " + app.command)
+  }
+  var c = isPlainObject(mode.commands) ? mode.commands : {}
+  var hooks = (Array.isArray(c.onActivate) ? c.onActivate : [])
+    .concat(Array.isArray(c.onDeactivate) ? c.onDeactivate : [])
+  for (var j = 0; j < hooks.length; j++) out.push("sh   " + hooks[j])
+  return out
+}
+
+// An `auto` trigger runs a mode, and so its commands, the first time a matching
+// window opens, with no further click from you. Importing a file cannot hand
+// out that standing permission, so imported triggers arrive asking. Promoting
+// one back to automatic is an edit you make yourself, on a mode you have read.
+//
+// "" is pinned to "ask" too, not just "auto": the default defers to your global
+// *Ask before switching* setting, so on a machine where that is off an imported
+// blank would resolve to automatic. The file does not get to inherit that.
+function disarmImportedTriggers(mode) {
+  var count = 0
+  var triggers = (isPlainObject(mode) && Array.isArray(mode.triggers)) ? mode.triggers : []
+  for (var i = 0; i < triggers.length; i++) {
+    if (!isPlainObject(triggers[i]) || triggers[i].behavior === "ask") continue
+    triggers[i].behavior = "ask"
+    count++
+  }
+  return count
+}
+
+// What the import pane renders: one entry per mode, each carrying the exact
+// command lines that mode would run.
+function importPreview(modes) {
+  var list = Array.isArray(modes) ? modes : []
+  var out = []
+  for (var i = 0; i < list.length; i++)
+    out.push({
+      id: asString(list[i] && list[i].id, ""),
+      name: asString(list[i] && list[i].name, ""),
+      runs: importRuns(list[i])
+    })
+  return out
+}
+
 function exportPayload(config, ids) {
   var wanted = Array.isArray(ids) ? ids : null
   var list = (config && Array.isArray(config.modes)) ? config.modes : []
@@ -612,14 +665,16 @@ function parseImport(text) {
 
   var out = []
   var ids = []
+  var disarmed = 0
   for (var i = 0; i < list.length; i++) {
     var ctx = normalizeMode(list[i], ids)
     if (!ctx) continue
+    disarmed += disarmImportedTriggers(ctx)
     ids.push(ctx.id)
     out.push(ctx)
   }
   if (out.length === 0) return { modes: [], error: "No modes found in the file." }
-  return { modes: out, error: "" }
+  return { modes: out, error: "", disarmed: disarmed }
 }
 
 function importModes(config, incoming, mode) {
@@ -986,6 +1041,9 @@ if (typeof module !== "undefined" && module.exports) {
     exportPayload: exportPayload,
     parseImport: parseImport,
     importModes: importModes,
+    importRuns: importRuns,
+    importPreview: importPreview,
+    disarmImportedTriggers: disarmImportedTriggers,
     PLACEMENT_TTL_MS: PLACEMENT_TTL_MS,
     placementKeys: placementKeys,
     prunePlacements: prunePlacements,

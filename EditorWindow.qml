@@ -32,6 +32,7 @@ Item {
   property string importText: ""
   property var importIncoming: []
   property bool importWarning: false
+  property int importDisarmed: 0
 
   readonly property var modes: service ? service.modes : []
   readonly property color foreground: Color.popups.text
@@ -400,11 +401,13 @@ Item {
       root.importIncoming = []
       return
     }
+    var preview = Model.importPreview(parsed.modes)
     var warn = false
-    for (var i = 0; i < parsed.modes.length; i++)
-      if (Model.modeHasCommands(parsed.modes[i])) warn = true
-    root.importIncoming = parsed.modes
+    for (var i = 0; i < preview.length; i++)
+      if (preview[i].runs.length > 0) warn = true
+    root.importIncoming = preview
     root.importWarning = warn
+    root.importDisarmed = parsed.disarmed
     root.importText = text
     root.pane = "import"
   }
@@ -790,7 +793,7 @@ Item {
                       anchors.margins: Style.space(8)
                       wrapMode: Text.Wrap
                       textFormat: Text.PlainText
-                      text: "⚠  This file contains applications or commands. Activating an imported mode will run them as you. Only import files you trust."
+                      text: "⚠  Activating one of these modes runs the lines below as you, `sh` ones through bash. Read them before you import."
                       color: root.foreground
                       font.family: root.fontFamily
                       font.pixelSize: Style.font.bodySmall
@@ -800,16 +803,52 @@ Item {
                   Repeater {
                     model: root.importIncoming
 
-                    Text {
+                    Column {
                       required property var modelData
                       width: detailColumn.width
-                      textFormat: Text.PlainText
-                      text: "• " + modelData.name + (Model.modeHasCommands(modelData) ? "  (runs programs)" : "")
-                      color: root.dim
-                      font.family: root.fontFamily
-                      font.pixelSize: Style.font.caption
-                      elide: Text.ElideRight
+                      spacing: Style.space(2)
+
+                      Text {
+                        width: parent.width
+                        textFormat: Text.PlainText
+                        text: "• " + modelData.name
+                        color: root.dim
+                        font.family: root.fontFamily
+                        font.pixelSize: Style.font.caption
+                        elide: Text.ElideRight
+                      }
+
+                      // The lines themselves, not a count of them. Consent to
+                      // "3 modes, some of which run things" is not consent.
+                      Repeater {
+                        model: modelData.runs
+
+                        Text {
+                          required property string modelData
+                          width: detailColumn.width - Style.space(16)
+                          x: Style.space(16)
+                          wrapMode: Text.Wrap
+                          textFormat: Text.PlainText
+                          text: modelData
+                          color: Color.urgent
+                          font.family: root.fontFamily
+                          font.pixelSize: Style.font.caption
+                        }
+                      }
                     }
+                  }
+
+                  Text {
+                    width: parent.width
+                    visible: root.importDisarmed > 0
+                    wrapMode: Text.Wrap
+                    textFormat: Text.PlainText
+                    text: root.importDisarmed + " automatic trigger(s) in this file will be imported as "
+                      + "\"ask\" instead. An imported mode never activates itself; turn one back to "
+                      + "automatic yourself once you trust it."
+                    color: root.dim
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.caption
                   }
 
                   Text {
