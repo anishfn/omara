@@ -696,7 +696,14 @@ available primitives reach.
 **Documents have ceilings before they are parsed.** A config or an import is
 capped at 4 MiB before `JSON.parse`, then at 200 modes, 100 applications, 50
 hooks and 50 triggers per mode, with field limits — all applied before anything
-is cloned or drawn. Generous next to any mode file a person would write.
+is cloned or drawn, and to the config on disk exactly as to an imported file.
+Generous next to any mode file a person would write.
+
+**Saves to one file are serialised.** Two renames racing can land in either
+order, which would let an older save overwrite a newer one on disk. Only one
+publication per target is ever in flight, and content queued behind it is
+coalesced, so what ends up on disk is the newest model rather than whichever
+process happened to finish last.
 
 **Importing is the only place untrusted data arrives.** An imported file is
 parsed, normalized, and previewed, never applied on sight. The preview shows the

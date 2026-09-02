@@ -298,16 +298,28 @@ function normalizeConfig(raw) {
   if (raw.modes !== undefined && !Array.isArray(raw.modes))
     warnings.push("`modes` was not a list; ignored.")
 
+  // The same ceiling the import path applies. A config is a document that
+  // arrives from disk, so it gets the document limits too — enforced before
+  // normalizing, which is where the allocation happens.
+  if (list.length > MAX_MODES) {
+    warnings.push("Config held " + list.length + " modes; kept the first " + MAX_MODES + ".")
+    list = list.slice(0, MAX_MODES)
+  }
+
   var ids = []
+  var dropped = 0
   for (var i = 0; i < list.length; i++) {
     var ctx = normalizeMode(list[i], ids)
     if (!ctx) {
-      warnings.push("Dropped a mode entry that could not be read.")
+      dropped++
       continue
     }
     ids.push(ctx.id)
     config.modes.push(ctx)
   }
+  // One line, not one per entry: a file of unreadable entries would otherwise
+  // turn a bounded document into an unbounded list of warnings.
+  if (dropped > 0) warnings.push("Dropped " + dropped + " mode entr" + (dropped === 1 ? "y" : "ies") + " that could not be read.")
 
   var active = asString(raw.activeMode, "").trim()
   config.activeMode = (active !== "" && ids.indexOf(active) !== -1) ? active : null

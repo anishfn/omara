@@ -210,7 +210,8 @@ Item {
     var isBlocking = blocking !== false
     service.runRegistry[id] = {
       settled: false, ok: true, detail: "", blocking: isBlocking,
-      label: name, argv: boundedAction(argv), obj: null, startedAt: 0
+      label: name, argv: boundedAction(argv), obj: null, startedAt: 0,
+      reported: false, exited: false
     }
 
     // State-changing actions run one at a time, in the order they were asked
@@ -258,7 +259,8 @@ Item {
     var rec = service.runRegistry[id]
     if (rec) {
       rec.obj = null
-      if (!rec.blocking) delete service.runRegistry[id]
+      rec.exited = true
+      if (rec.reported) delete service.runRegistry[id]
     }
     if (service.activeAction !== id) return
     service.activeAction = 0
@@ -266,6 +268,8 @@ Item {
   }
 
   // A process that outlives even its backstop would stall the queue behind it.
+  // The slot is only ever freed by a real exit, so a missing record here means
+  // the run is genuinely gone rather than merely reported.
   function sweepActions() {
     if (service.activeAction === 0) return
     var rec = service.runRegistry[service.activeAction]
@@ -290,9 +294,10 @@ Item {
     rec.ok = ok
     rec.detail = detail
     if (!rec.blocking) {
-      // Nobody is holding a verdict open for this one, so it reports itself.
-      // releaseRun clears the entry once the process has actually exited.
+      // Nobody is holding a verdict open for this one, so it reports itself
+      // here. releaseRun still owns the entry until the process exits.
       if (!ok) log("warn", detail)
+      rec.reported = true
       return
     }
     checkAwaiting()
@@ -437,14 +442,50 @@ Item {
     else obj.begin()
   }
 
+  // Publications are serialised per target. Two renames racing can land in
+  // either order, which would let an older save overwrite a newer one on disk.
+  // Queued content is also coalesced: if a newer model arrives while a write is
+  // in flight, the older one it superseded is never published at all.
+  property var writeQueue: ({})
+
   function writeGuarded(path, text, handler) {
+    var key = String(path)
+    var q = service.writeQueue[key]
+    if (!q) {
+      q = { running: false, pending: null }
+      service.writeQueue[key] = q
+    }
+    if (q.pending && typeof q.pending.handler === "function")
+      q.pending.handler("superseded", "a newer version was queued first", "")
+    q.pending = { text: String(text), handler: handler }
+    pumpWrites(key)
+  }
+
+  function pumpWrites(key) {
+    var q = service.writeQueue[key]
+    if (!q || q.running || !q.pending) return
+    var job = q.pending
+    q.pending = null
+    q.running = true
+
     var obj = guardedIo.createObject(service, {
-      argv: bounded(fileDeadlineSec, [binBash, "-c", writeScript, "bash", String(path)]),
-      payload: String(text),
-      handler: handler
+      argv: bounded(fileDeadlineSec, [binBash, "-c", writeScript, "bash", key]),
+      payload: job.text,
+      handler: function(verdict, detail) {
+        q.running = false
+        try {
+          if (typeof job.handler === "function") job.handler(verdict, detail, "")
+        } finally {
+          service.pumpWrites(key)
+        }
+      }
     })
-    if (!obj && typeof handler === "function") handler("refuse", "no writer could be started", "")
-    else if (obj) obj.begin()
+    if (!obj) {
+      q.running = false
+      if (typeof job.handler === "function") job.handler("refuse", "no writer could be started", "")
+      return
+    }
+    obj.begin()
   }
 
   // ------------------------------------------------------------ persistence
@@ -467,7 +508,7 @@ Item {
     if (text === lastWrittenText) return
     lastWrittenText = text
     writeGuarded(service.configPath, text, function(verdict, detail) {
-      if (verdict === "ok") return
+      if (verdict === "ok" || verdict === "superseded") return
       service.lastWrittenText = ""
       log("warn", "Could not write omara.json: " + detail)
     })
@@ -569,7 +610,8 @@ Item {
     if (service.stateReadOnly) return
     writeGuarded(service.statePath, JSON.stringify(service.previousState, null, 2) + "\n",
       function(verdict, detail) {
-        if (verdict !== "ok") log("warn", "Could not write omara-state.json: " + detail)
+        if (verdict !== "ok" && verdict !== "superseded")
+          log("warn", "Could not write omara-state.json: " + detail)
       })
   }
 
@@ -1072,8 +1114,15 @@ Item {
     for (var i = 0; i < results.length; i++) {
       var id = results[i] ? results[i].run : 0
       if (!id) continue
+      // Reporting is not the end of the run. The record is the queue's
+      // lifecycle slot as well as the verdict, so it is only dropped once the
+      // process has actually exited *and* its verdict has been read —
+      // whichever happens second does the deleting.
       var rec = service.runRegistry[id]
-      delete service.runRegistry[id]
+      if (rec) {
+        rec.reported = true
+        if (rec.exited) delete service.runRegistry[id]
+      }
       if (!rec || rec.ok) { log("info", results[i].detail); continue }
       results[i].ok = false
       results[i].detail = rec.detail

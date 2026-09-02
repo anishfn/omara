@@ -8,6 +8,19 @@ const root = path.join(__dirname, "..")
 const read = (f) => fs.readFileSync(path.join(root, f), "utf8")
 const qmlFiles = fs.readdirSync(root).filter((f) => f.endsWith(".qml"))
 
+// Slicing between two function names only works if you happen to know which
+// comes first in the file. Match braces instead.
+function fnBody(src, signature) {
+  const start = src.indexOf(signature)
+  if (start === -1) return ""
+  let depth = 0
+  for (let i = src.indexOf("{", start); i < src.length; i++) {
+    if (src[i] === "{") depth++
+    else if (src[i] === "}" && --depth === 0) return src.slice(start, i + 1)
+  }
+  return ""
+}
+
 // ------------------------------------------------------------------ parsing
 
 // qmllint reports a parse error as exit 255 with nothing on stderr, so the
@@ -375,6 +388,18 @@ test("a document that arrives as a file has ceilings before it is parsed", () =>
   // Cardinality, before anything is cloned or rendered.
   const many = JSON.stringify({ modes: Array.from({ length: 500 }, (_, i) => ({ id: "m" + i, name: "M" + i })) })
   assert.match(Model.parseImport(many).error, /more than/)
+
+  // The persisted config is a document off disk too, so it gets the same
+  // ceiling — applied before normalizing, which is where it would allocate.
+  const bigConfig = Model.parseConfig(many)
+  assert.equal(bigConfig.config.modes.length, 200)
+  assert.match(bigConfig.warnings.join(" "), /kept the first 200/)
+
+  // A file of unreadable entries must not turn a bounded document into an
+  // unbounded list of warnings.
+  const junk = Model.parseConfig(JSON.stringify({ modes: Array.from({ length: 200 }, () => 7) }))
+  assert.equal(junk.config.modes.length, 0)
+  assert.ok(junk.warnings.length <= 3, "one summary line, not one per entry")
 
   const fat = Model.parseImport(JSON.stringify({
     id: "fat", name: "Fat",
@@ -1043,6 +1068,39 @@ test("an activation reports what happened, not what it asked for", () => {
   assert.match(qml, /function deactivateMode[\s\S]*?awaitRuns\(results, function/)
   for (const fn of ["setTheme", "setWallpaper", "setDnd"])
     assert.match(qml, new RegExp(`function ${fn}[\\s\\S]*?run: run`), `${fn} drops its verdict`)
+
+  // State-changing actions are serialised so an older one cannot land last.
+  assert.match(qml, /function pumpActions/)
+  assert.match(qml, /function releaseRun/)
+  assert.match(qml, /planGeneration/)
+
+  // Reporting a verdict must not hand back the queue slot. The record is both
+  // the verdict and the lifecycle slot, so only the second of exit-and-report
+  // may drop it — otherwise the sweep sees a missing record, frees the slot,
+  // and starts the next mutation while the first process is still running.
+  // Stopping the wait must not destroy the owner of a still-running process:
+  // that would terminate the action the deadline exists not to kill.
+  const reportBody = fnBody(qml, "function report(code)")
+  assert.ok(reportBody.length > 0, "report() not found")
+  assert.doesNotMatch(reportBody, /destroy\(\)/)
+  assert.match(qml, /onExited: function\(exitCode\) \{[\s\S]*?run\.destroy\(\)/)
+  assert.match(qml, /onTriggered: run\.report\(124\)/)
+  // Teardown is explicit rather than implicit destruction.
+  assert.match(fnBody(qml, "function terminate()"), /proc\.signal\(15\)/)
+  assert.match(qml, /if \(proc\.running\) proc\.signal\(9\)/)
+
+  const finishBody = fnBody(qml, "function finishJob(job)")
+  assert.ok(finishBody.length > 0, "finishJob not found")
+  assert.match(finishBody, /rec\.reported = true[\s\S]*?if \(rec\.exited\) delete/)
+  assert.match(fnBody(qml, "function releaseRun(id)"), /rec\.exited = true[\s\S]*?if \(rec\.reported\) delete/)
+  // The queue slot is only ever freed on a real exit, never on a report.
+  assert.doesNotMatch(fnBody(qml, "function sweepActions()"), /\breport\(/)
+  assert.match(fnBody(qml, "function releaseRun(id)"), /service\.activeAction = 0/)
+
+  // Publications are serialised per target, newest content winning.
+  assert.match(qml, /function pumpWrites/)
+  assert.match(qml, /q\.running = true/)
+  assert.match(qml, /superseded/)
 })
 
 test("only the processes that must outlive the shell stay detached", () => {
