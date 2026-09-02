@@ -367,6 +367,49 @@ test("a mode carrying commands is flagged so the import can warn", () => {
   assert.equal(Model.modeHasCommands({ name: "Quiet" }), false)
 })
 
+test("a document that arrives as a file has ceilings before it is parsed", () => {
+  // Bytes, before JSON.parse, which is where the memory would go.
+  assert.match(Model.parseImport("x".repeat(5 * 1024 * 1024)).error, /larger than/)
+  assert.match(Model.parseConfig("x".repeat(5 * 1024 * 1024)).warnings[0], /larger than/)
+
+  // Cardinality, before anything is cloned or rendered.
+  const many = JSON.stringify({ modes: Array.from({ length: 500 }, (_, i) => ({ id: "m" + i, name: "M" + i })) })
+  assert.match(Model.parseImport(many).error, /more than/)
+
+  const fat = Model.parseImport(JSON.stringify({
+    id: "fat", name: "Fat",
+    applications: Array.from({ length: 5000 }, () => ({ command: "x" })),
+    commands: { onActivate: Array.from({ length: 5000 }, () => "echo hi") },
+    triggers: Array.from({ length: 5000 }, () => ({ type: "application", value: "firefox" }))
+  })).modes[0]
+  assert.ok(fat.applications.length <= 100)
+  assert.ok(fat.commands.onActivate.length <= 50)
+  assert.ok(fat.triggers.length <= 50)
+
+  // Field length, without truncating anything a person would actually write.
+  const wide = Model.parseImport(JSON.stringify({
+    id: "wide", name: "Wide", description: "d".repeat(100000),
+    commands: { onActivate: ["e".repeat(100000)] }
+  })).modes[0]
+  assert.ok(wide.description.length <= 2048)
+  assert.ok(wide.commands.onActivate[0].length <= 4096)
+
+  // A realistic config is untouched: field ceilings must not become a
+  // document ceiling applied by accident.
+  const real = JSON.stringify({
+    version: 1, activeMode: null,
+    modes: Array.from({ length: 40 }, (_, i) => ({
+      id: "mode-" + i, name: "Mode " + i, description: "x".repeat(300),
+      commands: { onActivate: ["echo " + "y".repeat(500)] }
+    }))
+  })
+  const parsed = Model.parseConfig(real)
+  assert.equal(parsed.recovered, false)
+  assert.equal(parsed.config.modes.length, 40)
+  assert.equal(parsed.config.modes[0].description.length, 300)
+  assert.equal(parsed.config.modes[0].commands.onActivate[0].length, 505)
+})
+
 test("an import preview names every line it would run, not just a count", () => {
   const preview = Model.importPreview(Model.parseImport(JSON.stringify({
     id: "evil",
@@ -950,19 +993,26 @@ test("probe output is bounded and cannot inherit from Object.prototype", () => {
     ["missing", "theme", "wallpaper"])
 })
 
-test("the path guard's report is a closed set of verdicts", () => {
-  const report = Model.parseGuardOutput(
-    "GUARD\tconfig\tok\t\n" +
-    "GUARD\tstate\trefuse\tit is not a regular file (found: fifo)\n")
-  assert.equal(report.config.verdict, "ok")
-  assert.equal(report.state.verdict, "refuse")
-  assert.match(report.state.detail, /fifo/)
-  assert.equal(Object.getPrototypeOf(report), null)
+test("a guarded read reports a closed set of verdicts, and caps the body", () => {
+  const ok = Model.parseFileResult("RESULT\tok\t\n{\"modes\":[]}", 4194304)
+  assert.equal(ok.verdict, "ok")
+  assert.equal(ok.content, '{"modes":[]}')
 
-  // A verdict the guard cannot emit is dropped, not believed.
-  assert.equal(Model.parseGuardOutput("GUARD\tconfig\tapproved\t").config, undefined)
-  assert.equal(Model.parseGuardOutput("NOISE\tconfig\tok\t").config, undefined)
-  assert.equal(Model.parseGuardOutput("GUARD\t\tok\t")[""], undefined)
+  const refused = Model.parseFileResult("RESULT\trefuse\tit is not a regular file (found: fifo)\n", 4194304)
+  assert.equal(refused.verdict, "refuse")
+  assert.match(refused.detail, /fifo/)
+  assert.equal(refused.content, "")
+
+  assert.equal(Model.parseFileResult("RESULT\tabsent\t\n", 4194304).verdict, "absent")
+
+  // A verdict the helper cannot emit, or no verdict line at all, is refused by
+  // the caller rather than read as success.
+  assert.equal(Model.parseFileResult("RESULT\tapproved\t\n", 4194304).verdict, "")
+  assert.equal(Model.parseFileResult("garbage without a newline", 4194304).verdict, "")
+  assert.equal(Model.parseFileResult("", 4194304).verdict, "")
+
+  // The parser applies the ceiling itself, whatever the producer sent.
+  assert.equal(Model.parseFileResult("RESULT\tok\t\n" + "x".repeat(5000), 1024).content.length, 1024)
 })
 
 test("a theme directory cannot vanish by sharing a name with a prototype key", () => {
@@ -1002,38 +1052,49 @@ test("only the processes that must outlive the shell stay detached", () => {
   // application, and the documented onActivate/onDeactivate hook.
   assert.equal(detached.length, 2)
   assert.match(qml, /function runCommand[\s\S]*?Quickshell\.execDetached\(\["bash", "-lc", c\]\)/)
-  // The export write is no longer a detached shell that logs success blind.
+  // The editor writes and reads through the service's guarded helpers, so the
+  // export cannot log success blind and an imported path is not trusted just
+  // because a file chooser produced it.
   const editor = read("EditorWindow.qml")
   assert.doesNotMatch(editor, /Quickshell\.execDetached/)
-  assert.match(editor, /onSaveFailed/)
+  assert.doesNotMatch(editor, /FileView\s*\{/)
+  assert.match(editor, /service\.writeGuarded\(/)
+  assert.match(editor, /service\.readGuarded\(/)
 })
 
-test("the config path is checked before FileView is ever pointed at it", () => {
+test("the config read carries its own guarantees instead of checking first", () => {
   const qml = read("Service.qml")
-  // FileView has no descriptor-relative read and no size ceiling, so the only
-  // place a hostile path can be caught is before the path is handed over.
-  assert.match(qml, /path: service\.configPathOk \? service\.configPath : ""/)
-  assert.match(qml, /path: service\.statePathOk \? service\.statePath : ""/)
-  assert.doesNotMatch(qml, /^\s*path: service\.configPath$/m)
-  assert.match(qml, /function checkPaths/)
-  // The recovery copy must not re-open the path it is recovering from.
+  // Checking a pathname and then handing the same name to FileView is
+  // check-then-use. The open itself has to be the thing that refuses.
+  assert.doesNotMatch(qml, /FileView\s*\{/)
+  assert.match(qml, /iflag=nofollow,nonblock/)
+  assert.match(qml, /count=\$\(\(limit \/ 4096\)\)/)
+  assert.match(qml, /function readGuarded/)
+  // Writes publish through a fresh 0600 temp and a rename, so a symlink or a
+  // FIFO at the target is replaced rather than written through.
+  assert.match(qml, /umask 077/)
+  assert.match(qml, /mktemp "\$dir\/\.omara\.XXXXXX"/)
+  assert.match(qml, /mv -f -- "\$tmp" "\$target"/)
+  // An incomplete check refuses; a guard that can be removed by breaking it
+  // is not a guard.
+  assert.match(qml, /the check did not complete/)
+  assert.match(qml, /configReadOnly/)
+  // The recovery copy still writes the bytes that were read.
   assert.doesNotMatch(qml, /cp -f --/)
   assert.match(qml, /function backupBrokenConfig\(raw\)/)
 })
 
-test("no subprocess the service reads from runs without a deadline", () => {
+test("the tools that enforce the boundaries are not resolved through PATH", () => {
   const qml = read("Service.qml")
-  assert.match(qml, /function bounded\(seconds, argv\)[\s\S]*?"timeout", "-k", "2"/)
-  // Actions get a far backstop instead, because killing one mid-flight can
-  // leave a half-applied theme; the reporting deadline just stops waiting.
-  assert.match(qml, /function boundedAction\(argv\)[\s\S]*?actionKillSec/)
-  assert.match(qml, /onTriggered: run\.finish\(124\)/)
-  // Every Process command in the service goes through bounded().
-  for (const id of ["guardProcess", "probeProcess", "captureProcess", "themeProcess"])
-    assert.match(qml, new RegExp(id + "\\.command = bounded\\("), id + " is unbounded")
-  assert.match(qml, /Component\.onDestruction/)
-  // head -c on theme.name, not cat: a FIFO there must end at the deadline.
-  assert.doesNotMatch(qml, /cat "\$HOME\/\.local\/state\/omarchy\/current\/theme\.name"/)
+  assert.match(qml, /binTimeout: "\/usr\/bin\/timeout"/)
+  assert.match(qml, /binBash: "\/usr\/bin\/bash"/)
+  assert.match(qml, /safePath: "PATH=\/usr\/bin:\/bin/)
+  // Guard, reader, writer and theme scan all run without the user's profile.
+  assert.doesNotMatch(qml, /bounded\([^)]*\[\s*"bash"/)
+  // The two intentional exceptions are the user's own launches and hooks,
+  // which are supposed to run in the user's own environment.
+  const detached = qml.match(/Quickshell\.execDetached\(\["bash", "-lc"/g) || []
+  assert.equal(detached.length, 2)
 })
 
 test("every workspace dispatch is built from a validated reference", () => {

@@ -13,6 +13,18 @@ var TRIGGER_BEHAVIORS = ["ask", "auto"]
 
 var TRIGGER_COOLDOWN_MS = 8000
 
+// Ceilings on anything that arrives as a document rather than as a click.
+// A config or an import is parsed, cloned and rendered, so an unbounded one
+// exhausts the shell long before a person could read the preview. These are
+// generous next to any real mode file and cheap to enforce.
+var MAX_IMPORT_BYTES = 4194304
+var MAX_MODES = 200
+var MAX_APPLICATIONS = 100
+var MAX_HOOKS = 50
+var MAX_TRIGGERS = 50
+var MAX_STRING = 2048
+var MAX_COMMAND = 4096
+
 // ---------------------------------------------------------------- utilities
 
 function isPlainObject(value) {
@@ -23,9 +35,17 @@ function clone(value) {
   return JSON.parse(JSON.stringify(value === undefined ? null : value))
 }
 
+// Every string that arrives from a file goes through here, so the clamp lives
+// with the conversion rather than at each call site.
+function clampString(value, limit) {
+  var s = typeof value === "string" ? value : ""
+  var cap = limit || MAX_STRING
+  return s.length > cap ? s.slice(0, cap) : s
+}
+
 function asString(value, fallback) {
   if (value === undefined || value === null) return fallback === undefined ? "" : fallback
-  if (typeof value === "string") return value
+  if (typeof value === "string") return clampString(value)
   if (typeof value === "number" || typeof value === "boolean") return String(value)
   return fallback === undefined ? "" : fallback
 }
@@ -74,11 +94,13 @@ function asWorkspace(value) {
   return isWorkspaceRef(s) ? s : null
 }
 
-function asStringList(value) {
+function asStringList(value, maxItems, maxLength) {
   if (!Array.isArray(value)) return []
   var out = []
-  for (var i = 0; i < value.length; i++) {
-    var s = asString(value[i], "").trim()
+  var cap = maxItems || MAX_HOOKS
+  var limit = value.length < cap ? value.length : cap
+  for (var i = 0; i < limit; i++) {
+    var s = clampString(asString(value[i], ""), maxLength || MAX_STRING).trim()
     if (s !== "") out.push(s)
   }
   return out
@@ -201,18 +223,22 @@ function normalizeMode(raw, takenIds) {
   var workspaces = isPlainObject(raw.workspaces) ? raw.workspaces : {}
   ctx.workspaces.target = asWorkspace(workspaces.target)
 
+  // Cardinality is capped here, before anything is cloned or rendered. A mode
+  // with a million applications is not a mode anyone wrote.
   var apps = Array.isArray(raw.applications) ? raw.applications : []
-  for (var i = 0; i < apps.length; i++) {
+  var appLimit = apps.length < MAX_APPLICATIONS ? apps.length : MAX_APPLICATIONS
+  for (var i = 0; i < appLimit; i++) {
     var app = normalizeApplication(apps[i])
     if (app) ctx.applications.push(app)
   }
 
   var commands = isPlainObject(raw.commands) ? raw.commands : {}
-  ctx.commands.onActivate = asStringList(commands.onActivate)
-  ctx.commands.onDeactivate = asStringList(commands.onDeactivate)
+  ctx.commands.onActivate = asStringList(commands.onActivate, MAX_HOOKS, MAX_COMMAND)
+  ctx.commands.onDeactivate = asStringList(commands.onDeactivate, MAX_HOOKS, MAX_COMMAND)
 
   var triggers = Array.isArray(raw.triggers) ? raw.triggers : []
-  for (var t = 0; t < triggers.length; t++) {
+  var triggerLimit = triggers.length < MAX_TRIGGERS ? triggers.length : MAX_TRIGGERS
+  for (var t = 0; t < triggerLimit; t++) {
     var trigger = normalizeTrigger(triggers[t])
     if (trigger) ctx.triggers.push(trigger)
   }
@@ -292,7 +318,18 @@ function normalizeConfig(raw) {
 }
 
 function parseConfig(text) {
-  var raw = asString(text, "").trim()
+  // Not asString: that clamps to MAX_STRING, which is a field ceiling, and a
+  // whole document is not a field. The document ceiling is enforced by the
+  // reader before this ever sees it, and again here.
+  var input = typeof text === "string" ? text : ""
+  if (input.length > MAX_IMPORT_BYTES)
+    return {
+      config: defaultConfig(),
+      warnings: ["omara.json is larger than " + MAX_IMPORT_BYTES + " bytes; started from defaults"],
+      recovered: true,
+      firstRun: false
+    }
+  var raw = input.trim()
   if (raw === "") return { config: defaultConfig(), warnings: [], recovered: false, firstRun: true }
   var parsed = null
   try {
@@ -649,7 +686,11 @@ function exportPayload(config, ids) {
 }
 
 function parseImport(text) {
-  var raw = asString(text, "").trim()
+  // Bounded before JSON.parse, not after: parsing is where the memory goes.
+  var input = typeof text === "string" ? text : ""
+  if (input.length > MAX_IMPORT_BYTES)
+    return { modes: [], error: "The file is larger than " + MAX_IMPORT_BYTES + " bytes." }
+  var raw = input.trim()
   if (raw === "") return { modes: [], error: "The file is empty." }
   var parsed = null
   try {
@@ -662,6 +703,9 @@ function parseImport(text) {
   else if (isPlainObject(parsed) && Array.isArray(parsed.modes)) list = parsed.modes
   else if (isPlainObject(parsed)) list = [parsed]
   if (!list) return { modes: [], error: "No modes found in the file." }
+
+  if (list.length > MAX_MODES)
+    return { modes: [], error: "The file holds more than " + MAX_MODES + " modes." }
 
   var out = []
   var ids = []
@@ -755,25 +799,23 @@ function parseProbeOutput(text) {
   return out
 }
 
-// The path guard's report. Same ceilings, same null-prototype reasoning: the
-// keys are looked up by name, and only the three verdicts the guard can emit
-// are accepted, so an unrecognised line is dropped rather than interpreted.
-function parseGuardOutput(text) {
-  var out = Object.create(null)
+// The guarded reader and writer answer on one line, then the body. The verdict
+// is a closed set: anything else is refused rather than guessed at.
+function parseFileResult(text, limit) {
   var raw = typeof text === "string" ? text : ""
-  if (raw.length > PROBE_MAX_BYTES) raw = raw.slice(0, PROBE_MAX_BYTES)
-  var lines = raw.split("\n")
-  var limit = lines.length < PROBE_MAX_LINES ? lines.length : PROBE_MAX_LINES
-  for (var i = 0; i < limit; i++) {
-    var parts = lines[i].split("\t")
-    if (parts[0] !== "GUARD") continue
-    var key = probeField(parts[1])
-    var verdict = probeField(parts[2])
-    if (key === "") continue
-    if (verdict !== "ok" && verdict !== "warn" && verdict !== "refuse") continue
-    out[key] = { verdict: verdict, detail: probeField(parts[3]) }
-  }
-  return out
+  var cap = typeof limit === "number" && limit > 0 ? limit : PROBE_MAX_BYTES
+  var newline = raw.indexOf("\n")
+  if (newline === -1) return { verdict: "", detail: "", content: "" }
+
+  var parts = raw.slice(0, newline).split("\t")
+  if (parts[0] !== "RESULT") return { verdict: "", detail: "", content: "" }
+  var verdict = probeField(parts[1])
+  if (verdict !== "ok" && verdict !== "absent" && verdict !== "refuse")
+    return { verdict: "", detail: "", content: "" }
+
+  var content = raw.slice(newline + 1)
+  if (content.length > cap) content = content.slice(0, cap)
+  return { verdict: verdict, detail: probeField(parts[2]), content: content }
 }
 
 function emptyProbeResult() {
@@ -1113,7 +1155,7 @@ if (typeof module !== "undefined" && module.exports) {
     PLACEMENT_TTL_MS: PLACEMENT_TTL_MS,
     placementKeys: placementKeys,
     parseProbeOutput: parseProbeOutput,
-    parseGuardOutput: parseGuardOutput,
+    parseFileResult: parseFileResult,
     emptyProbeResult: emptyProbeResult,
     prunePlacements: prunePlacements,
     matchPlacement: matchPlacement,

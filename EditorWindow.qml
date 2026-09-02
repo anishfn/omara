@@ -312,20 +312,16 @@ Item {
 
   // ------------------------------------------------------- import / export
 
-  // Written through FileView, which says whether the write landed. Handing the
-  // whole export to a detached shell put it on a command line, gave no way to
-  // learn that the write had failed, and logged success before it had happened.
+  // Through the same guarded writer as everything else: a fresh 0600 temp in a
+  // verified directory, renamed over the target, and an answer either way.
+  // Handing the whole export to a detached shell put it on a command line and
+  // logged success before anything had been written.
   function writeExport(target, payload) {
-    exportFile.path = String(target)
-    exportFile.setText(String(payload))
-  }
-
-  FileView {
-    id: exportFile
-    atomicWrites: true
-    printErrors: false
-    onSaved: if (root.service) root.service.log("info", "Exported modes to " + this.path)
-    onSaveFailed: if (root.service) root.service.log("warn", "Could not write " + this.path)
+    if (!root.service) return
+    root.service.writeGuarded(String(target), String(payload), function(verdict, detail) {
+      if (verdict === "ok") root.service.log("info", "Exported modes to " + target)
+      else root.service.log("warn", "Could not write " + target + ": " + detail)
+    })
   }
 
   function chooserCommand(argv) {
@@ -389,10 +385,18 @@ Item {
       waitForEnd: true
       onStreamFinished: {
         var path = root.firstLine(text)
-        if (path === "") return
+        if (path === "" || !root.service) return
         root.importPath = path
-        importFile.path = path
-        importFile.reload()
+        // The chooser hands back a pathname the user picked, which is no more
+        // trustworthy than any other pathname. It goes through the same
+        // no-follow, non-blocking, byte-capped read as the config.
+        root.service.readGuarded(path, function(verdict, detail, content) {
+          if (verdict === "ok") { root.stageImport(content); return }
+          root.importIncoming = []
+          root.service.log("warn", verdict === "absent"
+            ? "Import failed: " + path + " is not there any more"
+            : "Import failed: " + detail)
+        })
       }
     }
     stderr: StdioCollector {
@@ -402,13 +406,6 @@ Item {
     onExited: function(exitCode) { root.chooserFinished(exitCode) }
   }
 
-  FileView {
-    id: importFile
-    watchChanges: false
-    printErrors: false
-    onLoaded: root.stageImport(this.text())
-    onLoadFailed: root.importText = ""
-  }
 
   function stageImport(text) {
     var parsed = Model.parseImport(text)

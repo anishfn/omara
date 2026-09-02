@@ -638,7 +638,15 @@ collects telemetry, runs anything on install or import, writes outside
   it sends. A workspace that does not fit the grammar is refused at the edge, at
   save time, so no dispatch string is ever built from an arbitrary value.
 
-**Subprocess boundaries.** Every process Omara reads output from runs under
+**Subprocess boundaries.** The commands that enforce all of this — `timeout`,
+`bash`, `stat`, `dd`, `find` and friends — are resolved from `/usr/bin` rather
+than through your `PATH`, and the helper scripts pin `PATH` themselves. An entry
+earlier in `PATH` would otherwise be able to replace the very checks that make
+everything else meaningful. The one deliberate exception is the availability
+check for your own configured applications, which has to use your `PATH`,
+because that is the thing being tested.
+
+Every process Omara reads output from runs under
 `timeout -k 2` and is capped at the source — bytes, lines and item counts — with
 a QML watchdog behind it for a child that is unkillable rather than slow. None
 of it can wedge the shell: a FIFO where `theme.name` should be ends the read at
@@ -646,25 +654,49 @@ the deadline instead of blocking forever. Output is parsed into closed records
 with null-prototype maps, so nothing a subprocess prints can add a key or
 inherit one.
 
-**Actions report their real outcome.** Setting a theme, wallpaper, audio output
-or Do Not Disturb, and launching a desktop entry, all run supervised: Omara
-waits for the exit code and an activation does not claim success while something
-it needed has failed or is still trying. Three things stay detached, because
+**Actions report their real outcome, and land in order.** Setting a theme,
+wallpaper, audio output or Do Not Disturb, and launching a desktop entry, all
+run supervised: Omara waits for the exit code and an activation does not claim
+success while something it needed has failed or is still trying. They also run
+one at a time, in the order they were asked for, because two theme changes in
+flight at once can land in either order and leave the desktop showing something
+other than the mode that was reported. A verdict from a switch you have since
+replaced is logged, but it does not announce itself as the mode you are in.
+
+Stopping the wait is not the same as stopping the process. An action that
+overruns its reporting deadline is left running — killing `omarchy-theme-set`
+half way through applying is worse than waiting — and is only torn down on its
+real exit, or by a far backstop if it never comes. Three things stay detached, because
 they have to outlive the shell — a restart would otherwise kill them:
 `onActivate` / `onDeactivate`, raw application commands (where `exec "$@"`
 *becomes* the application), and anything Hyprland launches for us. Whether a raw
 command can start at all is answered before launch, by the same probe that marks
 missing applications.
 
-**Config paths are checked before they are opened.** Quickshell's `FileView`
-takes a pathname; it has no descriptor-relative read, no `O_NOFOLLOW` and no
-size ceiling. So a bounded `stat` guard runs first, at startup and every minute
-after, and refuses `omara.json` if it is not a regular file you own, is over
-4 MiB, or sits in a directory another user can write to. Refusing is not
-destructive: the file is left alone and nothing is written back. This closes the
-standing cases — a hostile or broken path already in place — but it is not a
-defence against someone who can already write to your config directory and swap
-the path mid-flight. Nothing expressible against that API would be.
+**Files carry their guarantees in the open itself.** Quickshell's `FileView`
+takes a pathname and reads to the end: no `O_NOFOLLOW`, no non-blocking open, no
+size ceiling. Checking the name first and then handing the same name over only
+narrows that window, so Omara does not use `FileView` at all. Reads go through
+`dd iflag=nofollow,nonblock` with a hard `count`×`bs` ceiling, beneath a
+directory verified to be yours and not writable by anyone else — a symlink is
+refused by the open, a FIFO returns empty instead of blocking, and an oversized
+file is cut off. Writes are the same transaction from the other side: a fresh
+`0600` temp file under `umask 077` in that verified directory, renamed over the
+target, so a symlink or FIFO at the destination is *replaced* rather than
+written through. An incomplete check refuses; a guard you can remove by breaking
+it is not a guard.
+
+The same read handles imports, because a path a file chooser produced is still
+just a path.
+
+What this does not do is hold one descriptor across an entire read-modify-write.
+Each read and each write carries its own guarantees, which is as far as the
+available primitives reach.
+
+**Documents have ceilings before they are parsed.** A config or an import is
+capped at 4 MiB before `JSON.parse`, then at 200 modes, 100 applications, 50
+hooks and 50 triggers per mode, with field limits — all applied before anything
+is cloned or drawn. Generous next to any mode file a person would write.
 
 **Importing is the only place untrusted data arrives.** An imported file is
 parsed, normalized, and previewed, never applied on sight. The preview shows the

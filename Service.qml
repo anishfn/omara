@@ -65,8 +65,19 @@ Item {
   // outlive the wait or leave the group orphaned. The QML watchdogs beside
   // each Process are the second line, for a child that is unkillable rather
   // than merely slow: they release whatever was waiting on it.
+  // These commands are what enforce the guard, the caps and the supervision,
+  // so they are resolved from a fixed location rather than through the user's
+  // PATH. An entry earlier in PATH would otherwise be able to replace the very
+  // checks that make everything below them meaningful.
+  readonly property string binTimeout: "/usr/bin/timeout"
+  readonly property string binBash: "/usr/bin/bash"
+
+  // Prefix for every helper script, for the same reason: the utilities inside
+  // a script are resolved through PATH too.
+  readonly property string safePath: "PATH=/usr/bin:/bin\nexport PATH\n"
+
   function bounded(seconds, argv) {
-    return ["timeout", "-k", "2", String(seconds)].concat(argv)
+    return [binTimeout, "-k", "2", String(seconds)].concat(argv)
   }
 
   // Actions are the other case, and they need the opposite default. Killing a
@@ -78,7 +89,7 @@ Item {
   readonly property int actionKillSec: 120
 
   function boundedAction(argv) {
-    return ["timeout", "-k", "5", String(actionKillSec)].concat(argv)
+    return [binTimeout, "-k", "5", String(actionKillSec)].concat(argv)
   }
 
   // ------------------------------------------------- supervised subprocesses
@@ -111,6 +122,13 @@ Item {
 
   property int nextRunId: 1
   property var runRegistry: ({})
+  property var actionQueue: []
+  property int activeAction: 0
+
+  // Bumped every time a plan is submitted. A verdict from an older generation
+  // is still logged, but it does not get to announce itself as the mode you
+  // are in — a later switch has already answered that.
+  property int planGeneration: 0
 
   // The Process and its deadline need a common parent to live under, since a
   // Process has no default property of its own to hold a Timer.
@@ -126,7 +144,11 @@ Item {
 
       function start() { proc.running = true }
 
-      function finish(code) {
+      // Stop waiting. This is not the same as stopping the process, and the
+      // owner has to stay alive either way: destroying it here would take the
+      // running Process with it and terminate a theme half way through
+      // applying — which is the thing the deadline is written to avoid.
+      function report(code) {
         if (run.settled) return
         run.settled = true
         runDeadline.stop()
@@ -134,13 +156,34 @@ Item {
           : ((code === 124 || code === 137)
             ? run.label + " did not report back within " + service.actionDeadlineSec + "s"
             : run.label + " exited " + code))
-        run.destroy()
+      }
+
+      // Teardown, explicitly: ask, then insist. Reaping is the kernel's job
+      // once the process group is gone, and `timeout` holds the outer bound.
+      function terminate() {
+        if (!proc.running) return
+        proc.signal(15)
+        killDelay.start()
+      }
+
+      Timer {
+        id: killDelay
+        interval: 2000
+        repeat: false
+        onTriggered: if (proc.running) proc.signal(9)
       }
 
       Process {
         id: proc
         command: run.argv
-        onExited: function(exitCode) { run.finish(exitCode) }
+        // The real exit, whenever it comes. Only now is it safe to tear the
+        // owner down, and only now is the child actually reaped.
+        onExited: function(exitCode) {
+          run.report(exitCode)
+          killDelay.stop()
+          service.releaseRun(run.runId)
+          run.destroy()
+        }
       }
 
       // Second line behind `timeout`, for a child that is unkillable rather
@@ -151,8 +194,9 @@ Item {
         repeat: false
         running: true
         // Stop waiting, do not kill. The process keeps going and finishes its
-        // work; we have simply stopped holding a verdict open for it.
-        onTriggered: run.finish(124)
+        // work; we have simply stopped holding a verdict open for it. The
+        // owner lives until the real exit, which the backstop guarantees.
+        onTriggered: run.report(124)
       }
     }
   }
@@ -163,16 +207,76 @@ Item {
   function runSupervised(argv, label, blocking) {
     var id = service.nextRunId++
     var name = String(label || (argv && argv[0]) || "command")
-    service.runRegistry[id] = { settled: false, ok: true, detail: "", blocking: blocking !== false }
-    var obj = supervisedRun.createObject(service, {
-      runId: id, label: name, argv: boundedAction(argv)
-    })
-    if (!obj) {
-      settleRun(id, false, name + " could not be started")
+    var isBlocking = blocking !== false
+    service.runRegistry[id] = {
+      settled: false, ok: true, detail: "", blocking: isBlocking,
+      label: name, argv: boundedAction(argv), obj: null, startedAt: 0
+    }
+
+    // State-changing actions run one at a time, in the order they were asked
+    // for. Two theme changes in flight at once can land in either order, which
+    // is how the desktop ends up showing something other than the mode that
+    // was reported. A notification changes nothing, so it does not queue.
+    if (!isBlocking) {
+      startRun(id)
       return id
     }
-    obj.start()
+    service.actionQueue = service.actionQueue.concat([id])
+    pumpActions()
     return id
+  }
+
+  function pumpActions() {
+    if (service.activeAction !== 0) return
+    if (service.actionQueue.length === 0) return
+    var id = service.actionQueue[0]
+    service.actionQueue = service.actionQueue.slice(1)
+    service.activeAction = id
+    startRun(id)
+  }
+
+  function startRun(id) {
+    var rec = service.runRegistry[id]
+    if (!rec) return
+    var obj = supervisedRun.createObject(service, {
+      runId: id, label: rec.label, argv: rec.argv
+    })
+    if (!obj) {
+      settleRun(id, false, rec.label + " could not be started")
+      releaseRun(id)
+      return
+    }
+    rec.obj = obj
+    rec.startedAt = Date.now()
+    obj.start()
+  }
+
+  // The process actually exited. The next queued action may only start now:
+  // releasing on the reporting deadline instead would put two of them in
+  // flight, which is the overlap the queue exists to prevent.
+  function releaseRun(id) {
+    var rec = service.runRegistry[id]
+    if (rec) {
+      rec.obj = null
+      if (!rec.blocking) delete service.runRegistry[id]
+    }
+    if (service.activeAction !== id) return
+    service.activeAction = 0
+    pumpActions()
+  }
+
+  // A process that outlives even its backstop would stall the queue behind it.
+  function sweepActions() {
+    if (service.activeAction === 0) return
+    var rec = service.runRegistry[service.activeAction]
+    if (!rec) {
+      service.activeAction = 0
+      pumpActions()
+      return
+    }
+    if (Date.now() - rec.startedAt < (service.actionKillSec + 15) * 1000) return
+    log("warn", rec.label + " outlived its backstop; terminating so the queue can move")
+    if (rec.obj) rec.obj.terminate()
   }
 
   function notify(argv) {
@@ -186,179 +290,167 @@ Item {
     rec.ok = ok
     rec.detail = detail
     if (!rec.blocking) {
-      // Nobody is holding a verdict open for this one, so it reports itself
-      // and clears its own entry rather than sitting in the registry forever.
+      // Nobody is holding a verdict open for this one, so it reports itself.
+      // releaseRun clears the entry once the process has actually exited.
       if (!ok) log("warn", detail)
-      delete service.runRegistry[id]
       return
     }
     checkAwaiting()
   }
 
-  // ------------------------------------------------------------- path guard
+  // ---------------------------------------------------------- guarded files
   //
-  // FileView is path-based: it takes a name, opens it, and reads to the end.
-  // There is no descriptor-relative read, no O_NOFOLLOW and no size ceiling in
-  // that API, so the check has to happen before the path is handed over. A
-  // FIFO at omara.json would otherwise block the shell on first read, and a
-  // symlink would redirect where the config is persisted.
+  // Quickshell's FileView takes a pathname, opens it, and reads to the end. It
+  // has no descriptor-relative read, no O_NOFOLLOW, no non-blocking open and no
+  // size ceiling, so a FIFO at omara.json would block the shell on first read
+  // and a symlink would redirect where modes are persisted.
   //
-  // This closes the standing cases — a hostile or broken path already sitting
-  // there, and a directory other users can write to. It is not a defence
-  // against a live race by someone who can already write to your config
-  // directory; nothing expressible against this API would be.
+  // Checking the path and then handing the same name to FileView only narrows
+  // that window; it does not close it. So the check and the read are one
+  // operation instead. `dd iflag=nofollow,nonblock` carries the guarantees in
+  // the open itself — a symlink is refused outright, a FIFO returns empty
+  // rather than blocking, and count×bs is a hard byte ceiling — and the read
+  // only happens beneath a directory verified to be ours and not writable by
+  // anyone else.
+  //
+  // Writes are the same transaction from the other side: a fresh 0600 temp
+  // file created under umask 077 in that verified directory, then renamed over
+  // the target. Rename replaces a symlink or a FIFO rather than writing
+  // through it, so the write cannot be redirected either.
+  //
+  // What this does not do is bind to an inode across the whole operation.
+  // Reads and writes each carry their own guarantees, which is as far as the
+  // available primitives reach.
 
   readonly property int fileMaxBytes: 4194304
-  readonly property int guardDeadlineSec: 5
+  readonly property int fileDeadlineSec: 5
 
-  property bool guardSettled: false
-  property bool configPathOk: false
-  property bool statePathOk: false
-  property string configRefusal: ""
-
-  readonly property string guardScript:
+  readonly property string dirCheck:
     'uid=$(id -u)\n' +
+    'dir=${target%/*}\n' +
+    'dinfo=$(stat -c \'%F|%u|%a\' -- "$dir" 2>/dev/null) || fail "$dir cannot be read"\n' +
+    'dtype=${dinfo%%|*}; drest=${dinfo#*|}\n' +
+    'downer=${drest%%|*}; dmode=${drest##*|}\n' +
+    '[ "$dtype" = directory ] || fail "$dir is not a directory (found: $dtype)"\n' +
+    '[ "$downer" = "$uid" ] || fail "$dir is owned by uid $downer, not by you"\n' +
+    'other=${dmode#"${dmode%?}"}\n' +
+    'case $other in 2|3|6|7) fail "$dir is writable by any user (mode $dmode)" ;; esac\n'
+
+  readonly property string readScript:
+    safePath +
+    'fail() { printf \'RESULT\\trefuse\\t%s\\n\' "$1"; exit 0; }\n' +
     'limit=$1\n' +
-    'shift\n' +
-    'for spec in "$@"; do\n' +
-    '  key=${spec%%=*}\n' +
-    '  path=${spec#*=}\n' +
-    '  dir=${path%/*}\n' +
-    '  verdict=ok\n' +
-    '  detail=\n' +
-    '  if info=$(stat -c \'%F|%u|%s\' -- "$path" 2>/dev/null); then\n' +
-    '    type=${info%%|*}\n' +
-    '    rest=${info#*|}\n' +
-    '    owner=${rest%%|*}\n' +
-    '    size=${rest##*|}\n' +
-    '    case $type in\n' +
-    '      "regular file" | "regular empty file") ;;\n' +
-    '      *) verdict=refuse; detail="it is not a regular file (found: $type)" ;;\n' +
-    '    esac\n' +
-    '    if [ "$verdict" != ok ]; then\n' +
-    '      :\n' +
-    '    elif [ "$owner" != "$uid" ]; then\n' +
-    '      verdict=refuse; detail="it is owned by uid $owner, not by you"\n' +
-    '    elif [ "$size" -gt "$limit" ]; then\n' +
-    '      verdict=refuse; detail="it is $size bytes, past the $limit byte ceiling"\n' +
-    '    fi\n' +
-    '  fi\n' +
-    '  if [ "$verdict" = ok ] && dinfo=$(stat -c \'%F|%u|%a\' -- "$dir" 2>/dev/null); then\n' +
-    '    dtype=${dinfo%%|*}\n' +
-    '    drest=${dinfo#*|}\n' +
-    '    downer=${drest%%|*}\n' +
-    '    dmode=${drest##*|}\n' +
-    '    other=${dmode#"${dmode%?}"}\n' +
-    '    head2=${dmode%?}\n' +
-    '    group=${head2#"${head2%?}"}\n' +
-    '    if [ "$dtype" != directory ]; then\n' +
-    '      verdict=refuse; detail="$dir is not a directory (found: $dtype)"\n' +
-    '    elif [ "$downer" != "$uid" ]; then\n' +
-    '      verdict=refuse; detail="$dir is owned by uid $downer, not by you"\n' +
-    '    else\n' +
-    '      case $other in 2|3|6|7) verdict=refuse; detail="$dir is writable by any user (mode $dmode)" ;; esac\n' +
-    '      case $group in 2|3|6|7) [ "$verdict" = ok ] && verdict=warn && detail="$dir is group-writable (mode $dmode)" ;; esac\n' +
-    '    fi\n' +
-    '  fi\n' +
-    '  printf \'GUARD\\t%s\\t%s\\t%s\\n\' "$key" "$verdict" "$detail"\n' +
-    'done\n'
+    'target=$2\n' +
+    dirCheck +
+    'if [ ! -e "$target" ]; then printf \'RESULT\\tabsent\\t\\n\'; exit 0; fi\n' +
+    'tinfo=$(stat -c \'%F|%u|%s\' -- "$target" 2>/dev/null) || fail "it cannot be read"\n' +
+    'ttype=${tinfo%%|*}; trest=${tinfo#*|}\n' +
+    'towner=${trest%%|*}; tsize=${trest##*|}\n' +
+    'case $ttype in\n' +
+    '  "regular file" | "regular empty file") ;;\n' +
+    '  *) fail "it is not a regular file (found: $ttype)" ;;\n' +
+    'esac\n' +
+    '[ "$towner" = "$uid" ] || fail "it is owned by uid $towner, not by you"\n' +
+    '[ "$tsize" -le "$limit" ] || fail "it is $tsize bytes, past the $limit byte ceiling"\n' +
+    // The open itself is where the guarantees live: nofollow refuses a symlink,
+    // nonblock refuses to wait on a FIFO, count x bs is the ceiling.
+    'body=$(dd if="$target" iflag=nofollow,nonblock bs=4096 count=$((limit / 4096)) 2>/dev/null)' +
+    ' || fail "it could not be opened without following a link"\n' +
+    'printf \'RESULT\\tok\\t\\n\'\n' +
+    'printf \'%s\' "$body"\n'
 
-  function checkPaths() {
-    if (guardProcess.running) return
-    guardProcess.command = bounded(guardDeadlineSec, [
-      "bash", "-lc", guardScript, "bash", String(service.fileMaxBytes),
-      "config=" + service.configPath, "state=" + service.statePath
-    ])
-    guardProcess.running = true
-    guardWatchdog.restart()
-  }
+  readonly property string writeScript:
+    safePath +
+    'fail() { printf \'RESULT\\trefuse\\t%s\\n\' "$1"; exit 0; }\n' +
+    'target=$1\n' +
+    dirCheck +
+    'umask 077\n' +
+    'tmp=$(mktemp "$dir/.omara.XXXXXX") || fail "no temporary file could be made in $dir"\n' +
+    'cat > "$tmp" || { rm -f "$tmp"; fail "the write did not complete"; }\n' +
+    'mv -f -- "$tmp" "$target" || { rm -f "$tmp"; fail "the file could not be replaced"; }\n' +
+    'printf \'RESULT\\tok\\t\\n\'\n'
 
-  // Runs at startup and again on every reconcile tick, so this has to be quiet
-  // when nothing has changed. refuseConfig() dedupes on the reason.
-  function applyGuard(report) {
-    var config = report ? report["config"] : null
-    var state = report ? report["state"] : null
-    var configOk = !config || config.verdict !== "refuse"
-    var stateOk = !state || state.verdict !== "refuse"
+  Component {
+    id: guardedIo
 
-    if (config && config.verdict === "warn" && !service.guardSettled)
-      log("warn", "omara.json: " + config.detail)
+    Item {
+      id: io
+      property var argv: []
+      property string payload: ""
+      property var handler: null
+      property bool done: false
 
-    if (configOk) service.configRefusal = ""
-    else refuseConfig(config.detail)
+      function begin() {
+        proc.running = true
+        if (io.payload === "") return
+        proc.write(io.payload)
+        proc.stdinEnabled = false
+      }
 
-    if (!stateOk && (!service.guardSettled || service.statePathOk))
-      log("warn", "Not reading or writing omara-state.json: " + state.detail)
+      function settle(verdict, detail, content) {
+        if (io.done) return
+        io.done = true
+        deadline.stop()
+        try {
+          if (typeof io.handler === "function") io.handler(verdict, detail, content)
+        } catch (e) {
+          service.log("warn", "File handler failed: " + (e && e.message ? e.message : "error"))
+        }
+        io.destroy()
+      }
 
-    var firstSettle = !service.guardSettled
-    service.configPathOk = configOk
-    service.statePathOk = stateOk
-    service.guardSettled = true
+      Process {
+        id: proc
+        command: io.argv
+        stdinEnabled: io.payload !== ""
+        stdout: StdioCollector { waitForEnd: true }
+        onExited: function(exitCode) {
+          var parsed = Model.parseFileResult(String(proc.stdout.text || ""), service.fileMaxBytes)
+          if (exitCode !== 0 && parsed.verdict === "")
+            io.settle("refuse", "the check did not complete (exit " + exitCode + ")", "")
+          else io.settle(parsed.verdict || "refuse", parsed.detail, parsed.content)
+        }
+      }
 
-    if (!firstSettle) return
-    if (stateOk) stateFile.reload()
-    if (configOk) configFile.reload()
-  }
-
-  // Refusing is not destructive: nothing on disk is touched, and `configLoaded`
-  // stays false, which is what stops save() from ever writing through.
-  function refuseConfig(detail) {
-    var reason = String(detail || "it did not pass the path check")
-    if (service.configRefusal === reason) return
-    service.configRefusal = reason
-    log("warn", "Refusing to read or write omara.json: " + reason)
-    notify([
-      "omarchy-notification-send", "--app-name", "Omara", "-u", "critical", "Omara",
-      "omara.json was not used because " + reason
-        + ". Omara started with no modes and will not write to that path. Nothing was changed or deleted."
-    ])
-  }
-
-  Process {
-    id: guardProcess
-    stdout: StdioCollector {
-      waitForEnd: true
-      onStreamFinished: service.applyGuard(Model.parseGuardOutput(String(text || "")))
-    }
-    onExited: function(exitCode) {
-      guardWatchdog.stop()
-      // Fail open only when the check itself could not run. A positively
-      // detected hazard fails closed; an unavailable `stat` must not lock a
-      // working install out of its own config.
-      if (exitCode !== 0 && !service.guardSettled) {
-        log("warn", "Could not check the config paths (exit " + exitCode + "); continuing")
-        service.configPathOk = true
-        service.statePathOk = true
-        service.guardSettled = true
+      Timer {
+        id: deadline
+        interval: (service.fileDeadlineSec + 3) * 1000
+        repeat: false
+        running: true
+        onTriggered: {
+          if (proc.running) proc.running = false
+          io.settle("refuse", "the check did not finish in " + service.fileDeadlineSec + "s", "")
+        }
       }
     }
   }
 
-  Timer {
-    id: guardWatchdog
-    interval: (service.guardDeadlineSec + 3) * 1000
-    repeat: false
-    onTriggered: {
-      if (guardProcess.running) guardProcess.running = false
-      if (service.guardSettled) return
-      log("warn", "The config path check did not finish in " + service.guardDeadlineSec + "s; continuing")
-      service.configPathOk = true
-      service.statePathOk = true
-      service.guardSettled = true
-    }
+  // An incomplete check refuses. Failing open here would mean the guard could
+  // be removed simply by making it fail, which is not a guard.
+  function readGuarded(path, handler) {
+    var obj = guardedIo.createObject(service, {
+      argv: bounded(fileDeadlineSec,
+        [binBash, "-c", readScript, "bash", String(fileMaxBytes), String(path)]),
+      handler: handler
+    })
+    if (!obj) handler("refuse", "no reader could be started", "")
+    else obj.begin()
   }
 
-  // A reloaded or torn-down plugin must not leave children running. Every
-  // Process here is bounded by `timeout` as well, so an escaped one still ends
-  // on its own; this is what makes the common case immediate.
-  Component.onDestruction: {
-    guardProcess.running = false
-    probeProcess.running = false
-    captureProcess.running = false
-    themeProcess.running = false
+  function writeGuarded(path, text, handler) {
+    var obj = guardedIo.createObject(service, {
+      argv: bounded(fileDeadlineSec, [binBash, "-c", writeScript, "bash", String(path)]),
+      payload: String(text),
+      handler: handler
+    })
+    if (!obj && typeof handler === "function") handler("refuse", "no writer could be started", "")
+    else if (obj) obj.begin()
   }
 
   // ------------------------------------------------------------ persistence
+
+  property string configRefusal: ""
+  property bool configReadOnly: false
 
   function applyConfig(next, reason) {
     var normalized = Model.normalizeConfig(next)
@@ -370,11 +462,35 @@ Item {
   }
 
   function save() {
-    if (!configLoaded) return
+    if (!configLoaded || service.configReadOnly) return
     var text = Model.serializeConfig(service.config)
     if (text === lastWrittenText) return
     lastWrittenText = text
-    configFile.setText(text)
+    writeGuarded(service.configPath, text, function(verdict, detail) {
+      if (verdict === "ok") return
+      service.lastWrittenText = ""
+      log("warn", "Could not write omara.json: " + detail)
+    })
+  }
+
+  function loadConfigFromDisk() {
+    readGuarded(service.configPath, function(verdict, detail, content) {
+      if (verdict === "refuse") {
+        service.configReadOnly = true
+        refuseConfig(detail)
+        if (!service.configLoaded) {
+          service.configLoaded = true
+          service.modesUpdated()
+        }
+        return
+      }
+      service.configReadOnly = false
+      service.configRefusal = ""
+      var text = verdict === "absent" ? "" : content
+      if (service.configLoaded && text === service.lastWrittenText) return
+      service.lastWrittenText = text
+      service.loadConfig(text)
+    })
   }
 
   function loadConfig(raw) {
@@ -386,69 +502,59 @@ Item {
     service.modesUpdated()
   }
 
+  // Refusing is not destructive: the path is left exactly as it was, and
+  // configReadOnly is what stops anything being written back through it.
+  function refuseConfig(detail) {
+    var reason = String(detail || "it did not pass the file check")
+    if (service.configRefusal === reason) return
+    service.configRefusal = reason
+    log("warn", "Refusing to read or write omara.json: " + reason)
+    notify([
+      "omarchy-notification-send", "--app-name", "Omara", "-u", "critical", "Omara",
+      "omara.json was not used because " + reason
+        + ". Omara started with no modes and will not write to that path. Nothing was changed or deleted."
+    ])
+  }
+
   // The recovery copy is the bytes that were actually read, not a second open
   // of the same name. Copying by path re-resolved it, so what landed in the
   // backup was whatever the name pointed at by then rather than what failed to
   // parse — and a detached copy nobody was watching did the writing.
   function backupBrokenConfig(raw) {
     var backup = service.configPath + ".corrupt"
-    backupFile.path = backup
-    backupFile.setText(String(raw === undefined || raw === null ? "" : raw))
-    log("warn", "Saved the unreadable omara.json as " + backup + " before starting from defaults")
+    writeGuarded(backup, String(raw === undefined || raw === null ? "" : raw), function(verdict, detail) {
+      if (verdict === "ok") log("warn", "Saved the unreadable omara.json as " + backup)
+      else log("warn", "Could not save " + backup + ": " + detail)
+    })
     notify([
       "omarchy-notification-send", "--app-name", "Omara", "-u", "normal",
       "Omara", "omara.json could not be read. A copy was saved as omara.json.corrupt."
     ])
   }
 
-  FileView {
-    id: backupFile
-    atomicWrites: true
-    printErrors: false
-  }
-
-  FileView {
-    id: configFile
-    path: service.configPathOk ? service.configPath : ""
-    watchChanges: true
-    atomicWrites: true
-    printErrors: false
-    onFileChanged: reload()
-    onLoaded: {
-      var text = this.text()
-      if (service.configLoaded && text === service.lastWrittenText) return
-      service.lastWrittenText = text
-      service.configFileSeen = true
-      service.loadConfig(text)
-    }
-    onLoadFailed: if (service.configPathOk && !service.configLoaded) service.loadConfig("")
-  }
-
-  property bool configFileSeen: false
-
-  // A file watcher dies when the file is replaced by rename; this heals it.
-  // The guard runs again first: a path that has become a FIFO or a symlink
-  // since startup must not be reopened just because it once passed.
+  // Polling rather than watching: a file watcher dies when the file is
+  // replaced by rename, which is exactly how this file is written.
   Timer {
     id: reconcileTimer
     interval: 60000
     repeat: true
     running: true
-    onTriggered: {
-      service.checkPaths()
-      if (service.configPathOk) configFile.reload()
-    }
+    onTriggered: service.loadConfigFromDisk()
   }
 
-  FileView {
-    id: stateFile
-    path: service.statePathOk ? service.statePath : ""
-    watchChanges: false
-    atomicWrites: true
-    printErrors: false
-    onLoaded: service.loadState(this.text())
-    onLoadFailed: service.previousState = ({})
+  function loadStateFromDisk() {
+    readGuarded(service.statePath, function(verdict, detail, content) {
+      if (verdict === "refuse") {
+        service.stateReadOnly = true
+        log("warn", "Not reading or writing omara-state.json: " + detail)
+        return
+      }
+      service.stateReadOnly = false
+      service.loadState(verdict === "absent" ? "" : content)
+    })
   }
+
+  property bool stateReadOnly: false
 
   function loadState(raw) {
     try {
@@ -460,7 +566,11 @@ Item {
   }
 
   function saveState() {
-    stateFile.setText(JSON.stringify(service.previousState, null, 2) + "\n")
+    if (service.stateReadOnly) return
+    writeGuarded(service.statePath, JSON.stringify(service.previousState, null, 2) + "\n",
+      function(verdict, detail) {
+        if (verdict !== "ok") log("warn", "Could not write omara-state.json: " + detail)
+      })
   }
 
   // ----------------------------------------------------------- environment
@@ -758,7 +868,7 @@ Item {
     if (probeProcess.running) probeProcess.running = false
     service.probeSettled = false
     probeProcess.command = bounded(probeDeadlineSec,
-      ["bash", "-lc", probeScript, "bash"].concat(binaries.slice(0, probeMaxBinaries)))
+      [binBash, "-lc", probeScript, "bash"].concat(binaries.slice(0, probeMaxBinaries)))
     probeProcess.running = true
     probeWatchdog.restart()
   }
@@ -771,7 +881,13 @@ Item {
   // blocks, which is what the enclosing `timeout` is for.
   readonly property int probeDeadlineSec: 10
   readonly property int probeMaxBinaries: 256
+  //
+  // This one keeps the login shell, deliberately and narrowly: `command -v` is
+  // asking whether *your* environment can start a configured application, so it
+  // has to use your PATH. Everything else in the script uses the pinned one.
   readonly property string probeScript:
+    'userpath=$PATH\n' +
+    safePath +
     'ws=$(readlink -f "$HOME/.local/state/omarchy/current/background" 2>/dev/null | head -c 4096)\n' +
     'printf \'WALLPAPER\\t%s\\n\' "$ws"\n' +
     'th=$(head -c 256 "$HOME/.local/state/omarchy/current/theme.name" 2>/dev/null | head -n 1)\n' +
@@ -780,7 +896,7 @@ Item {
     'for bin in "$@"; do\n' +
     '  n=$((n + 1)); [ "$n" -gt 256 ] && break\n' +
     '  b=$(printf %s "$bin" | head -c 256)\n' +
-    '  if command -v -- "$b" >/dev/null 2>&1; then printf \'APP\\tok\\t%s\\n\' "$b"\n' +
+    '  if PATH=$userpath command -v -- "$b" >/dev/null 2>&1; then printf \'APP\\tok\\t%s\\n\' "$b"\n' +
     '  else printf \'APP\\tmissing\\t%s\\n\' "$b"; fi\n' +
     'done\n'
 
@@ -883,6 +999,7 @@ Item {
     // alone takes about six seconds, and holding a switch closed for that long
     // would make every theme change feel like a hang.
     var silent = pending.silent === true
+    var generation = ++service.planGeneration
     service.activating = false
     service.pendingActivation = null
 
@@ -891,8 +1008,12 @@ Item {
     // signal all wait for what actually happened.
     awaitRuns(results, function(outcome) {
       var summary = Model.summarize(ctx.name, outcome)
+      var current = generation === service.planGeneration
       log(summary.warnings > 0 ? "warn" : "info",
-        "Activated " + ctx.name + (summary.warnings > 0 ? " with " + summary.warnings + " warning(s)" : ""))
+        "Activated " + ctx.name + (summary.warnings > 0 ? " with " + summary.warnings + " warning(s)" : "")
+          + (current ? "" : " (superseded by a later switch)"))
+      // A stale plan does not get to announce itself as the current mode.
+      if (!current) return
       if (!silent) notifySummary(ctx, summary)
       service.activationFinished(ctx.id, summary.warnings)
     })
@@ -918,7 +1039,6 @@ Item {
     service.awaitJobs = service.awaitJobs.concat([
       { results: results, ids: ids, done: done, at: Date.now() }
     ])
-    if (!awaitSweep.running) awaitSweep.start()
     checkAwaiting()
   }
 
@@ -943,7 +1063,6 @@ Item {
     // to the new list, not to one we are about to overwrite.
     service.awaitJobs = waiting
     for (var k = 0; k < ready.length; k++) finishJob(ready[k])
-    if (service.awaitJobs.length === 0) awaitSweep.stop()
   }
 
   function finishJob(job) {
@@ -974,6 +1093,7 @@ Item {
     id: awaitSweep
     interval: 2000
     repeat: true
+    running: service.awaitJobs.length > 0 || service.activeAction !== 0
     onTriggered: {
       var now = Date.now()
       var limit = (service.actionDeadlineSec + 8) * 1000
@@ -984,7 +1104,7 @@ Item {
           service.settleRun(jobs[j].ids[i], false, "an action never reported back")
       }
       service.checkAwaiting()
-      if (service.awaitJobs.length === 0) awaitSweep.stop()
+      service.sweepActions()
     }
   }
 
@@ -1073,8 +1193,12 @@ Item {
 
     var name = ctx ? ctx.name : "No mode"
     var silent = opts.silent === true
+    var generation = ++service.planGeneration
     awaitRuns(results, function() {
-      log("info", ctx ? "Deactivated " + ctx.name : "No mode was active")
+      var current = generation === service.planGeneration
+      log("info", (ctx ? "Deactivated " + ctx.name : "No mode was active")
+        + (current ? "" : " (superseded by a later switch)"))
+      if (!current) return
       if (!silent && config.behavior.showNotifications !== false)
         notify(["omarchy-notification-send", "--app-name", "Omara", "Omara", "No mode. " + name + " turned off."])
       service.activationFinished("", 0)
@@ -1221,13 +1345,14 @@ Item {
   // count and byte caps bound the result, and `timeout` bounds the wait.
   readonly property int themeDeadlineSec: 10
   readonly property string themeScript:
+    safePath +
     'find -L "$OMARCHY_PATH/themes" "$HOME/.config/omarchy/themes" ' +
     '-mindepth 1 -maxdepth 1 -type d -printf \'%f\\n\' 2>/dev/null ' +
     '| head -n 512 | head -c 65536 | sort -u\n'
 
   function refreshThemes() {
     if (themeProcess.running) return
-    themeProcess.command = bounded(themeDeadlineSec, ["bash", "-lc", themeScript])
+    themeProcess.command = bounded(themeDeadlineSec, [binBash, "-c", themeScript])
     themeProcess.running = true
     themeWatchdog.restart()
   }
@@ -1260,7 +1385,7 @@ Item {
     if (captureProcess.running) return false
     service.captureName = String(name || "")
     service.captureSettled = false
-    captureProcess.command = bounded(probeDeadlineSec, ["bash", "-lc", probeScript, "bash"])
+    captureProcess.command = bounded(probeDeadlineSec, [binBash, "-lc", probeScript, "bash"])
     captureProcess.running = true
     captureWatchdog.restart()
     return true
@@ -1532,7 +1657,7 @@ Item {
     }
 
     function reload(): string {
-      configFile.reload()
+      service.loadConfigFromDisk()
       return "ok"
     }
 
@@ -1556,9 +1681,11 @@ Item {
 
   // ---------------------------------------------------------------- startup
 
-  // The guard runs first and the FileViews are read once it clears them, so
-  // there is nothing to reload here until then.
-  Component.onCompleted: service.checkPaths()
+  // Both reads carry their own checks, so there is nothing to clear first.
+  Component.onCompleted: {
+    service.loadStateFromDisk()
+    service.loadConfigFromDisk()
+  }
 
   property bool restoreAttempted: false
   onConfigLoadedChanged: {
