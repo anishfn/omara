@@ -69,6 +69,110 @@ Item {
     return ["timeout", "-k", "2", String(seconds)].concat(argv)
   }
 
+  // ------------------------------------------------- supervised subprocesses
+  //
+  // Quickshell.execDetached hands back nothing: no start, no exit code, no
+  // deadline. Anything whose failure changes what a mode actually did runs
+  // through here instead, so an activation reports what happened rather than
+  // what it asked for.
+  //
+  // Three things deliberately stay detached, for one reason: they must outlive
+  // the shell. Supervising a process means parenting it, and a parented
+  // application dies the next time omarchy-restart-shell runs.
+  //
+  //   onActivate / onDeactivate  the documented hook capability
+  //   raw application commands   `exec "$@"` becomes the application itself
+  //   Hyprland-placed launches   the compositor owns those, not us
+  //
+  // Desktop entries are supervised even though they start applications, because
+  // uwsm-app is a client: it asks the app daemon to launch under systemd and
+  // exits. Its exit code is the launch verdict, and killing it at the deadline
+  // cannot reach the application.
+  //
+  // Nothing here collects stdout or stderr. The exit code is the whole answer,
+  // and output that is never collected is the only ceiling that cannot be
+  // exceeded.
+
+  readonly property int actionDeadlineSec: 15
+
+  property int nextRunId: 1
+  property var runRegistry: ({})
+
+  Component {
+    id: supervisedRun
+
+    Process {
+      id: run
+      property int runId: 0
+      property string label: ""
+      property bool settled: false
+
+      onExited: function(exitCode) { run.finish(exitCode) }
+
+      function finish(code) {
+        if (run.settled) return
+        run.settled = true
+        runDeadline.stop()
+        service.settleRun(run.runId, code === 0, code === 0 ? ""
+          : ((code === 124 || code === 137)
+            ? run.label + " did not finish in " + service.actionDeadlineSec + "s"
+            : run.label + " exited " + code))
+        run.destroy()
+      }
+
+      // Second line behind `timeout`, for a child that is unkillable rather
+      // than slow. Whatever is waiting on this run gets released either way.
+      Timer {
+        id: runDeadline
+        interval: (service.actionDeadlineSec + 3) * 1000
+        repeat: false
+        running: true
+        onTriggered: {
+          if (run.running) run.running = false
+          run.finish(124)
+        }
+      }
+    }
+  }
+
+  // Returns a token an activation step can carry, so the step's own result is
+  // amended once the process actually reports. A non-blocking run is one whose
+  // failure is worth a log line but should not hold up the verdict.
+  function runSupervised(argv, label, blocking) {
+    var id = service.nextRunId++
+    var name = String(label || (argv && argv[0]) || "command")
+    service.runRegistry[id] = { settled: false, ok: true, detail: "", blocking: blocking !== false }
+    var obj = supervisedRun.createObject(service, {
+      runId: id, label: name, command: bounded(actionDeadlineSec, argv)
+    })
+    if (!obj) {
+      settleRun(id, false, name + " could not be started")
+      return id
+    }
+    obj.running = true
+    return id
+  }
+
+  function notify(argv) {
+    runSupervised(argv, "omarchy-notification-send", false)
+  }
+
+  function settleRun(id, ok, detail) {
+    var rec = service.runRegistry[id]
+    if (!rec || rec.settled) return
+    rec.settled = true
+    rec.ok = ok
+    rec.detail = detail
+    if (!rec.blocking) {
+      // Nobody is holding a verdict open for this one, so it reports itself
+      // and clears its own entry rather than sitting in the registry forever.
+      if (!ok) log("warn", detail)
+      delete service.runRegistry[id]
+      return
+    }
+    checkAwaiting()
+  }
+
   // ------------------------------------------------------------- path guard
   //
   // FileView is path-based: it takes a name, opens it, and reads to the end.
@@ -176,7 +280,7 @@ Item {
     if (service.configRefusal === reason) return
     service.configRefusal = reason
     log("warn", "Refusing to read or write omara.json: " + reason)
-    Quickshell.execDetached([
+    notify([
       "omarchy-notification-send", "--app-name", "Omara", "-u", "critical", "Omara",
       "omara.json was not used because " + reason
         + ". Omara started with no modes and will not write to that path. Nothing was changed or deleted."
@@ -266,7 +370,7 @@ Item {
     backupFile.path = backup
     backupFile.setText(String(raw === undefined || raw === null ? "" : raw))
     log("warn", "Saved the unreadable omara.json as " + backup + " before starting from defaults")
-    Quickshell.execDetached([
+    notify([
       "omarchy-notification-send", "--app-name", "Omara", "-u", "normal",
       "Omara", "omara.json could not be read. A copy was saved as omara.json.corrupt."
     ])
@@ -378,34 +482,36 @@ Item {
     var on = value === true
     if (notificationsService && typeof notificationsService.setDoNotDisturb === "function") {
       notificationsService.setDoNotDisturb(on)
-      Quickshell.execDetached(["omarchy-shell", "-q", "omarchy.indicators", "refresh"])
+      runSupervised(["omarchy-shell", "-q", "omarchy.indicators", "refresh"], "indicator refresh", false)
       return { ok: true, detail: on ? "Do Not Disturb on" : "Do Not Disturb off" }
     }
-    Quickshell.execDetached(["omarchy-shell", "-q", "notifications", "setDnd", on ? "on" : "off"])
-    return { ok: true, detail: on ? "Do Not Disturb on" : "Do Not Disturb off" }
+    var run = runSupervised(["omarchy-shell", "-q", "notifications", "setDnd", on ? "on" : "off"], "setDnd")
+    return { ok: true, detail: on ? "Do Not Disturb on" : "Do Not Disturb off", run: run }
   }
 
   function setAudioOutput(name) {
     var node = findSink(name)
     if (!node) return { ok: false, detail: "Audio output \"" + name + "\" is not available; kept the current output" }
     Pipewire.preferredDefaultAudioSink = node
+    var run = 0
     if (node.id !== undefined && node.name)
-      Quickshell.execDetached(["omarchy-audio-output-set-default", String(node.id), String(node.name)])
-    return { ok: true, detail: "Audio output → " + String(node.description || node.name) }
+      run = runSupervised(["omarchy-audio-output-set-default", String(node.id), String(node.name)],
+        "omarchy-audio-output-set-default")
+    return { ok: true, detail: "Audio output → " + String(node.description || node.name), run: run }
   }
 
   function setWallpaper(path) {
     var p = String(path || "")
     if (p === "") return { ok: false, detail: "No wallpaper set" }
-    Quickshell.execDetached(["omarchy-theme-bg-set", p])
-    return { ok: true, detail: "Wallpaper → " + p }
+    var run = runSupervised(["omarchy-theme-bg-set", p], "omarchy-theme-bg-set")
+    return { ok: true, detail: "Wallpaper → " + p, run: run }
   }
 
   function setTheme(name) {
     var n = String(name || "")
     if (n === "") return { ok: false, detail: "No theme set" }
-    Quickshell.execDetached(["omarchy-theme-set", n])
-    return { ok: true, detail: "Theme → " + n }
+    var run = runSupervised(["omarchy-theme-set", n], "omarchy-theme-set")
+    return { ok: true, detail: "Theme → " + n, run: run }
   }
 
   function focusWorkspace(target) {
@@ -511,9 +617,10 @@ Item {
       appLibrary.launch(desktopId, name)
       return { ok: true, detail: "Launched " + name }
     }
-    Quickshell.execDetached(["bash", "-lc", 'exec "$@"', "bash",
-      "uwsm-app", "--", "gtk-launch", desktopId + ".desktop"])
-    return { ok: true, detail: "Launched " + name }
+    // uwsm-app asks the app daemon to launch under systemd and exits, so its
+    // exit code is the launch verdict and the deadline cannot reach the app.
+    var run = runSupervised(["uwsm-app", "--", "gtk-launch", desktopId + ".desktop"], name)
+    return { ok: true, detail: "Launched " + name, run: run }
   }
 
   function launchApplication(command, workspace) {
@@ -533,10 +640,16 @@ Item {
       return { ok: true, detail: "Launched " + parsed.argv[0] + " on workspace " + workspace }
     }
 
+    // Detached on purpose: `exec "$@"` becomes the application, so supervising
+    // this would parent it to the shell and kill it on the next shell restart.
+    // Whether it could start at all is answered ahead of time by the probe,
+    // which is why runPlan skips a command that is not installed.
     Quickshell.execDetached(["bash", "-lc", 'exec "$@"', "bash"].concat(parsed.argv))
     return { ok: true, detail: "Launched " + parsed.argv[0] }
   }
 
+  // The documented hook capability, and detached for the same reason as a raw
+  // launch: a hook that starts something is entitled to outlive the shell.
   function runCommand(command) {
     var c = String(command || "").trim()
     if (c === "") return { ok: false, detail: "Empty command" }
@@ -690,20 +803,30 @@ Item {
       runActivation()
     } catch (e) {
       log("warn", "Activation failed: " + (e && e.message ? e.message : "error"))
-    } finally {
-      service.activating = false
-      service.pendingActivation = null
+      abandonActivation()
     }
+  }
+
+  // `activating` now comes down at the verdict, not at the end of the plan, so
+  // every path out of an activation has to release it. These are the early
+  // exits, which never got as far as starting anything to wait for.
+  function abandonActivation() {
+    service.activating = false
+    service.pendingActivation = null
   }
 
   function runActivation() {
     var pending = service.pendingActivation
     service.pendingActivation = null
-    if (!pending) return
+    if (!pending) {
+      abandonActivation()
+      return
+    }
 
     var ctx = Model.findMode(config, pending.modeId)
     if (!ctx) {
       log("warn", "Mode disappeared mid-activation")
+      abandonActivation()
       return
     }
 
@@ -732,11 +855,101 @@ Item {
     service.lastActivationAt = Date.now()
     service.modesUpdated()
 
-    var summary = Model.summarize(ctx.name, results)
-    log(summary.warnings > 0 ? "warn" : "info",
-      "Activated " + ctx.name + (summary.warnings > 0 ? " with " + summary.warnings + " warning(s)" : ""))
-    if (!pending.silent) notifySummary(ctx, summary)
-    service.activationFinished(ctx.id, summary.warnings)
+    // The mode is active either way; what waits is the verdict. An activation
+    // must not announce success while the programs it needed are still trying
+    // to start, or have already failed to.
+    var silent = pending.silent === true
+    awaitRuns(results, function(outcome) {
+      var summary = Model.summarize(ctx.name, outcome)
+      log(summary.warnings > 0 ? "warn" : "info",
+        "Activated " + ctx.name + (summary.warnings > 0 ? " with " + summary.warnings + " warning(s)" : ""))
+      if (!silent) notifySummary(ctx, summary)
+      service.activationFinished(ctx.id, summary.warnings)
+      service.activating = false
+      service.pendingActivation = null
+    })
+  }
+
+  // ------------------------------------------------------------- the verdict
+  //
+  // A plan finishes when its supervised steps have reported, not when the last
+  // one was asked to start. Deactivation waits the same way activation does:
+  // both restore settings through the same functions, so both hand back the
+  // same tokens and both would otherwise announce a result they do not have.
+
+  property var awaiting: null
+  property var awaitQueue: []
+
+  function awaitRuns(results, done) {
+    var ids = []
+    for (var i = 0; i < results.length; i++)
+      if (results[i] && results[i].run) ids.push(results[i].run)
+    var job = { results: results, ids: ids, done: done }
+    if (service.awaiting) service.awaitQueue = service.awaitQueue.concat([job])
+    else startAwait(job)
+  }
+
+  function startAwait(job) {
+    service.awaiting = job
+    if (job.ids.length > 0) awaitWatchdog.restart()
+    checkAwaiting()
+  }
+
+  function checkAwaiting() {
+    var a = service.awaiting
+    if (!a) return
+    for (var i = 0; i < a.ids.length; i++) {
+      var rec = service.runRegistry[a.ids[i]]
+      if (rec && !rec.settled) return
+    }
+    finishAwait()
+  }
+
+  function finishAwait() {
+    var a = service.awaiting
+    if (!a) return
+    service.awaiting = null
+    awaitWatchdog.stop()
+
+    // A step carrying a token was not logged when it ran. This is where it
+    // gets its one line, and the line says what actually happened.
+    var results = a.results
+    for (var i = 0; i < results.length; i++) {
+      var id = results[i] ? results[i].run : 0
+      if (!id) continue
+      var rec = service.runRegistry[id]
+      delete service.runRegistry[id]
+      if (!rec || rec.ok) { log("info", results[i].detail); continue }
+      results[i].ok = false
+      results[i].detail = rec.detail
+      log("warn", rec.detail)
+    }
+
+    try {
+      if (typeof a.done === "function") a.done(results)
+    } catch (e) {
+      log("warn", "Could not finish: " + (e && e.message ? e.message : "error"))
+      service.activating = false
+    }
+
+    if (service.awaitQueue.length > 0) {
+      var next = service.awaitQueue[0]
+      service.awaitQueue = service.awaitQueue.slice(1)
+      startAwait(next)
+    }
+  }
+
+  Timer {
+    id: awaitWatchdog
+    interval: (service.actionDeadlineSec + 8) * 1000
+    repeat: false
+    onTriggered: {
+      var a = service.awaiting
+      if (!a) return
+      for (var i = 0; i < a.ids.length; i++)
+        service.settleRun(a.ids[i], false, "an action never reported back")
+      service.finishAwait()
+    }
   }
 
   function runPlan(plan, missingBinaries) {
@@ -756,7 +969,7 @@ Item {
         result = safeApply(step)
       }
       results.push(result)
-      log(result.ok ? "info" : "warn", result.detail)
+      if (!result.run) log(result.ok ? "info" : "warn", result.detail)
     }
     return results
   }
@@ -823,10 +1036,13 @@ Item {
     service.modesUpdated()
 
     var name = ctx ? ctx.name : "No mode"
-    log("info", ctx ? "Deactivated " + ctx.name : "No mode was active")
-    if (!opts.silent && config.behavior.showNotifications !== false)
-      Quickshell.execDetached(["omarchy-notification-send", "--app-name", "Omara", "Omara", "No mode. " + name + " turned off."])
-    service.activationFinished("", 0)
+    var silent = opts.silent === true
+    awaitRuns(results, function() {
+      log("info", ctx ? "Deactivated " + ctx.name : "No mode was active")
+      if (!silent && config.behavior.showNotifications !== false)
+        notify(["omarchy-notification-send", "--app-name", "Omara", "Omara", "No mode. " + name + " turned off."])
+      service.activationFinished("", 0)
+    })
     return true
   }
 
@@ -837,7 +1053,7 @@ Item {
     if (summary.warnings > 0) argv = argv.concat(["-u", "normal"])
     argv.push("Mode: " + ctx.name)
     if (summary.body) argv.push(summary.body)
-    Quickshell.execDetached(argv)
+    notify(argv)
   }
 
   // ---------------------------------------------------------------- capture
@@ -1171,7 +1387,7 @@ Item {
     }
 
     log("info", "Trigger: " + decision.reason + " → asking about " + ctx.name)
-    Quickshell.execDetached([
+    notify([
       "omarchy-notification-send",
       "--app-name", "Omara",
       "-u", "normal",

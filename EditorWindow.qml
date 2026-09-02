@@ -312,6 +312,22 @@ Item {
 
   // ------------------------------------------------------- import / export
 
+  // Written through FileView, which says whether the write landed. Handing the
+  // whole export to a detached shell put it on a command line, gave no way to
+  // learn that the write had failed, and logged success before it had happened.
+  function writeExport(target, payload) {
+    exportFile.path = String(target)
+    exportFile.setText(String(payload))
+  }
+
+  FileView {
+    id: exportFile
+    atomicWrites: true
+    printErrors: false
+    onSaved: if (root.service) root.service.log("info", "Exported modes to " + this.path)
+    onSaveFailed: if (root.service) root.service.log("warn", "Could not write " + this.path)
+  }
+
   function chooserCommand(argv) {
     return ["bash", "-lc", 'exec "$@"', "bash"].concat(argv)
   }
@@ -437,10 +453,7 @@ Item {
       onStreamFinished: {
         var dir = root.firstLine(text)
         if (dir === "" || !root.service) return
-        var payload = root.service.exportText(null)
-        var target = dir + "/omara-export.json"
-        Quickshell.execDetached(["bash", "-lc", 'printf %s "$1" > "$2"', "bash", payload, target])
-        root.service.log("info", "Exported modes to " + target)
+        root.writeExport(dir + "/omara-export.json", root.service.exportText(null))
       }
     }
   }

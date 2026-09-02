@@ -6,6 +6,26 @@ const Model = require("../Model.js")
 
 const root = path.join(__dirname, "..")
 const read = (f) => fs.readFileSync(path.join(root, f), "utf8")
+const qmlFiles = fs.readdirSync(root).filter((f) => f.endsWith(".qml"))
+
+// ------------------------------------------------------------------ parsing
+
+// qmllint reports a parse error as exit 255 with nothing on stderr, so the
+// exit code is the only signal. Worth its own test: `final` is a reserved word
+// the QML parser rejects outright, and nothing else here would have caught it.
+test("every QML file parses", { skip: !hasQmllint() }, () => {
+  const { spawnSync } = require("node:child_process")
+  for (const file of qmlFiles) {
+    const run = spawnSync("qmllint", [file], { cwd: root })
+    assert.equal(run.status, 0,
+      `${file} does not parse (qmllint exit ${run.status})\n${run.stderr}`)
+  }
+})
+
+function hasQmllint() {
+  const { spawnSync } = require("node:child_process")
+  return spawnSync("qmllint", ["--version"]).status === 0
+}
 
 // ------------------------------------------------------------------ storage
 
@@ -946,6 +966,34 @@ test("the import pane shows the lines it would run before anything is imported",
   assert.match(qml, /root\.importDisarmed/)
   // Nothing is applied until a button is pressed.
   assert.match(qml, /function confirmImport/)
+})
+
+test("an activation reports what happened, not what it asked for", () => {
+  const qml = read("Service.qml")
+  // Steps carry a token and are logged at the verdict, never optimistically.
+  assert.match(qml, /function runSupervised\(argv, label, blocking\)/)
+  assert.match(qml, /if \(!result\.run\) log\(result\.ok \? "info" : "warn", result\.detail\)/)
+  assert.match(qml, /function finishAwait/)
+  // activating comes down at the verdict, and every exit path releases it.
+  assert.match(qml, /function abandonActivation/)
+  assert.match(qml, /id: awaitWatchdog/)
+  // Deactivation restores settings through the same functions, so it waits too.
+  assert.match(qml, /function deactivateMode[\s\S]*?awaitRuns\(results, function/)
+  for (const fn of ["setTheme", "setWallpaper", "setDnd"])
+    assert.match(qml, new RegExp(`function ${fn}[\\s\\S]*?run: run`), `${fn} drops its verdict`)
+})
+
+test("only the processes that must outlive the shell stay detached", () => {
+  const qml = read("Service.qml")
+  const detached = qml.match(/Quickshell\.execDetached\(/g) || []
+  // Exactly two: the raw application launch, where `exec "$@"` becomes the
+  // application, and the documented onActivate/onDeactivate hook.
+  assert.equal(detached.length, 2)
+  assert.match(qml, /function runCommand[\s\S]*?Quickshell\.execDetached\(\["bash", "-lc", c\]\)/)
+  // The export write is no longer a detached shell that logs success blind.
+  const editor = read("EditorWindow.qml")
+  assert.doesNotMatch(editor, /Quickshell\.execDetached/)
+  assert.match(editor, /onSaveFailed/)
 })
 
 test("the config path is checked before FileView is ever pointed at it", () => {

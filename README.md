@@ -638,6 +638,34 @@ collects telemetry, runs anything on install or import, writes outside
   it sends. A workspace that does not fit the grammar is refused at the edge, at
   save time, so no dispatch string is ever built from an arbitrary value.
 
+**Subprocess boundaries.** Every process Omara reads output from runs under
+`timeout -k 2` and is capped at the source — bytes, lines and item counts — with
+a QML watchdog behind it for a child that is unkillable rather than slow. None
+of it can wedge the shell: a FIFO where `theme.name` should be ends the read at
+the deadline instead of blocking forever. Output is parsed into closed records
+with null-prototype maps, so nothing a subprocess prints can add a key or
+inherit one.
+
+**Actions report their real outcome.** Setting a theme, wallpaper, audio output
+or Do Not Disturb, and launching a desktop entry, all run supervised: Omara
+waits for the exit code and an activation does not claim success while something
+it needed has failed or is still trying. Three things stay detached, because
+they have to outlive the shell — a restart would otherwise kill them:
+`onActivate` / `onDeactivate`, raw application commands (where `exec "$@"`
+*becomes* the application), and anything Hyprland launches for us. Whether a raw
+command can start at all is answered before launch, by the same probe that marks
+missing applications.
+
+**Config paths are checked before they are opened.** Quickshell's `FileView`
+takes a pathname; it has no descriptor-relative read, no `O_NOFOLLOW` and no
+size ceiling. So a bounded `stat` guard runs first, at startup and every minute
+after, and refuses `omara.json` if it is not a regular file you own, is over
+4 MiB, or sits in a directory another user can write to. Refusing is not
+destructive: the file is left alone and nothing is written back. This closes the
+standing cases — a hostile or broken path already in place — but it is not a
+defence against someone who can already write to your config directory and swap
+the path mid-flight. Nothing expressible against that API would be.
+
 **Importing is the only place untrusted data arrives.** An imported file is
 parsed, normalized, and previewed, never applied on sight. The preview shows the
 exact command lines each mode would run, not a count of them, and every imported
@@ -726,7 +754,7 @@ after you fixed it, `omarchy-restart-shell` clears it.
 
 | File | What it is |
 |---|---|
-| `Model.js` | Schema, activation plans, triggers, import/export. No Qt and no Quickshell, which is why node can test it. |
+| `Model.js` | Schema, activation plans, triggers, import/export, and the bounded parsers for subprocess output. No Qt and no Quickshell, which is why node can test it. |
 | `Service.qml` | Config file, runtime snapshot, activation, triggers, the `omara` IPC target, and the editor window. |
 | `BarWidget.qml` | Bar button and switcher popup. |
 | `ModeRow.qml` | One mode in a list. |
