@@ -918,6 +918,21 @@ test("probe output is bounded and cannot inherit from Object.prototype", () => {
     ["missing", "theme", "wallpaper"])
 })
 
+test("the path guard's report is a closed set of verdicts", () => {
+  const report = Model.parseGuardOutput(
+    "GUARD\tconfig\tok\t\n" +
+    "GUARD\tstate\trefuse\tit is not a regular file (found: fifo)\n")
+  assert.equal(report.config.verdict, "ok")
+  assert.equal(report.state.verdict, "refuse")
+  assert.match(report.state.detail, /fifo/)
+  assert.equal(Object.getPrototypeOf(report), null)
+
+  // A verdict the guard cannot emit is dropped, not believed.
+  assert.equal(Model.parseGuardOutput("GUARD\tconfig\tapproved\t").config, undefined)
+  assert.equal(Model.parseGuardOutput("NOISE\tconfig\tok\t").config, undefined)
+  assert.equal(Model.parseGuardOutput("GUARD\t\tok\t")[""], undefined)
+})
+
 test("a theme directory cannot vanish by sharing a name with a prototype key", () => {
   const themes = Model.themeList(["gruvbox", "constructor", "toString", "gruvbox"])
   assert.deepEqual(themes.map(t => t.slug).sort(), ["constructor", "gruvbox", "toString"])
@@ -931,6 +946,30 @@ test("the import pane shows the lines it would run before anything is imported",
   assert.match(qml, /root\.importDisarmed/)
   // Nothing is applied until a button is pressed.
   assert.match(qml, /function confirmImport/)
+})
+
+test("the config path is checked before FileView is ever pointed at it", () => {
+  const qml = read("Service.qml")
+  // FileView has no descriptor-relative read and no size ceiling, so the only
+  // place a hostile path can be caught is before the path is handed over.
+  assert.match(qml, /path: service\.configPathOk \? service\.configPath : ""/)
+  assert.match(qml, /path: service\.statePathOk \? service\.statePath : ""/)
+  assert.doesNotMatch(qml, /^\s*path: service\.configPath$/m)
+  assert.match(qml, /function checkPaths/)
+  // The recovery copy must not re-open the path it is recovering from.
+  assert.doesNotMatch(qml, /cp -f --/)
+  assert.match(qml, /function backupBrokenConfig\(raw\)/)
+})
+
+test("no subprocess the service reads from runs without a deadline", () => {
+  const qml = read("Service.qml")
+  assert.match(qml, /function bounded\(seconds, argv\)[\s\S]*?"timeout", "-k", "2"/)
+  // Every Process command in the service goes through bounded().
+  for (const id of ["guardProcess", "probeProcess", "captureProcess", "themeProcess"])
+    assert.match(qml, new RegExp(id + "\\.command = bounded\\("), id + " is unbounded")
+  assert.match(qml, /Component\.onDestruction/)
+  // head -c on theme.name, not cat: a FIFO there must end at the deadline.
+  assert.doesNotMatch(qml, /cat "\$HOME\/\.local\/state\/omarchy\/current\/theme\.name"/)
 })
 
 test("every workspace dispatch is built from a validated reference", () => {

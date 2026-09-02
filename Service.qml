@@ -69,6 +69,166 @@ Item {
     return ["timeout", "-k", "2", String(seconds)].concat(argv)
   }
 
+  // ------------------------------------------------------------- path guard
+  //
+  // FileView is path-based: it takes a name, opens it, and reads to the end.
+  // There is no descriptor-relative read, no O_NOFOLLOW and no size ceiling in
+  // that API, so the check has to happen before the path is handed over. A
+  // FIFO at omara.json would otherwise block the shell on first read, and a
+  // symlink would redirect where the config is persisted.
+  //
+  // This closes the standing cases — a hostile or broken path already sitting
+  // there, and a directory other users can write to. It is not a defence
+  // against a live race by someone who can already write to your config
+  // directory; nothing expressible against this API would be.
+
+  readonly property int fileMaxBytes: 4194304
+  readonly property int guardDeadlineSec: 5
+
+  property bool guardSettled: false
+  property bool configPathOk: false
+  property bool statePathOk: false
+  property string configRefusal: ""
+
+  readonly property string guardScript:
+    'uid=$(id -u)\n' +
+    'limit=$1\n' +
+    'shift\n' +
+    'for spec in "$@"; do\n' +
+    '  key=${spec%%=*}\n' +
+    '  path=${spec#*=}\n' +
+    '  dir=${path%/*}\n' +
+    '  verdict=ok\n' +
+    '  detail=\n' +
+    '  if info=$(stat -c \'%F|%u|%s\' -- "$path" 2>/dev/null); then\n' +
+    '    type=${info%%|*}\n' +
+    '    rest=${info#*|}\n' +
+    '    owner=${rest%%|*}\n' +
+    '    size=${rest##*|}\n' +
+    '    case $type in\n' +
+    '      "regular file" | "regular empty file") ;;\n' +
+    '      *) verdict=refuse; detail="it is not a regular file (found: $type)" ;;\n' +
+    '    esac\n' +
+    '    if [ "$verdict" != ok ]; then\n' +
+    '      :\n' +
+    '    elif [ "$owner" != "$uid" ]; then\n' +
+    '      verdict=refuse; detail="it is owned by uid $owner, not by you"\n' +
+    '    elif [ "$size" -gt "$limit" ]; then\n' +
+    '      verdict=refuse; detail="it is $size bytes, past the $limit byte ceiling"\n' +
+    '    fi\n' +
+    '  fi\n' +
+    '  if [ "$verdict" = ok ] && dinfo=$(stat -c \'%F|%u|%a\' -- "$dir" 2>/dev/null); then\n' +
+    '    dtype=${dinfo%%|*}\n' +
+    '    drest=${dinfo#*|}\n' +
+    '    downer=${drest%%|*}\n' +
+    '    dmode=${drest##*|}\n' +
+    '    other=${dmode#"${dmode%?}"}\n' +
+    '    head2=${dmode%?}\n' +
+    '    group=${head2#"${head2%?}"}\n' +
+    '    if [ "$dtype" != directory ]; then\n' +
+    '      verdict=refuse; detail="$dir is not a directory (found: $dtype)"\n' +
+    '    elif [ "$downer" != "$uid" ]; then\n' +
+    '      verdict=refuse; detail="$dir is owned by uid $downer, not by you"\n' +
+    '    else\n' +
+    '      case $other in 2|3|6|7) verdict=refuse; detail="$dir is writable by any user (mode $dmode)" ;; esac\n' +
+    '      case $group in 2|3|6|7) [ "$verdict" = ok ] && verdict=warn && detail="$dir is group-writable (mode $dmode)" ;; esac\n' +
+    '    fi\n' +
+    '  fi\n' +
+    '  printf \'GUARD\\t%s\\t%s\\t%s\\n\' "$key" "$verdict" "$detail"\n' +
+    'done\n'
+
+  function checkPaths() {
+    if (guardProcess.running) return
+    guardProcess.command = bounded(guardDeadlineSec, [
+      "bash", "-lc", guardScript, "bash", String(service.fileMaxBytes),
+      "config=" + service.configPath, "state=" + service.statePath
+    ])
+    guardProcess.running = true
+    guardWatchdog.restart()
+  }
+
+  // Runs at startup and again on every reconcile tick, so this has to be quiet
+  // when nothing has changed. refuseConfig() dedupes on the reason.
+  function applyGuard(report) {
+    var config = report ? report["config"] : null
+    var state = report ? report["state"] : null
+    var configOk = !config || config.verdict !== "refuse"
+    var stateOk = !state || state.verdict !== "refuse"
+
+    if (config && config.verdict === "warn" && !service.guardSettled)
+      log("warn", "omara.json: " + config.detail)
+
+    if (configOk) service.configRefusal = ""
+    else refuseConfig(config.detail)
+
+    if (!stateOk && (!service.guardSettled || service.statePathOk))
+      log("warn", "Not reading or writing omara-state.json: " + state.detail)
+
+    service.configPathOk = configOk
+    service.statePathOk = stateOk
+    service.guardSettled = true
+  }
+
+  // Refusing is not destructive: nothing on disk is touched, and `configLoaded`
+  // stays false, which is what stops save() from ever writing through.
+  function refuseConfig(detail) {
+    var reason = String(detail || "it did not pass the path check")
+    if (service.configRefusal === reason) return
+    service.configRefusal = reason
+    log("warn", "Refusing to read or write omara.json: " + reason)
+    Quickshell.execDetached([
+      "omarchy-notification-send", "--app-name", "Omara", "-u", "critical", "Omara",
+      "omara.json was not used because " + reason
+        + ". Omara started with no modes and will not write to that path. Nothing was changed or deleted."
+    ])
+  }
+
+  Process {
+    id: guardProcess
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: service.applyGuard(Model.parseGuardOutput(String(text || "")))
+    }
+    onExited: function(exitCode) {
+      guardWatchdog.stop()
+      // Fail open only when the check itself could not run. A positively
+      // detected hazard fails closed; an unavailable `stat` must not lock a
+      // working install out of its own config.
+      if (exitCode !== 0 && !service.guardSettled) {
+        log("warn", "Could not check the config paths (exit " + exitCode + "); continuing")
+        service.configPathOk = true
+        service.statePathOk = true
+        service.guardSettled = true
+      }
+    }
+  }
+
+  Timer {
+    id: guardWatchdog
+    interval: (service.guardDeadlineSec + 3) * 1000
+    repeat: false
+    onTriggered: {
+      if (guardProcess.running) guardProcess.running = false
+      if (service.guardSettled) return
+      log("warn", "The config path check did not finish in " + service.guardDeadlineSec + "s; continuing")
+      service.configPathOk = true
+      service.statePathOk = true
+      service.guardSettled = true
+    }
+  }
+
+  Component.onCompleted: service.checkPaths()
+
+  // A reloaded or torn-down plugin must not leave children running. Every
+  // Process here is bounded by `timeout` as well, so an escaped one still ends
+  // on its own; this is what makes the common case immediate.
+  Component.onDestruction: {
+    guardProcess.running = false
+    probeProcess.running = false
+    captureProcess.running = false
+    themeProcess.running = false
+  }
+
   // ------------------------------------------------------------ persistence
 
   function applyConfig(next, reason) {
@@ -92,15 +252,20 @@ Item {
     var parsed = Model.parseConfig(raw)
     service.config = parsed.config
     for (var i = 0; i < parsed.warnings.length; i++) log("warn", parsed.warnings[i])
-    if (parsed.recovered) service.backupBrokenConfig()
+    if (parsed.recovered) service.backupBrokenConfig(raw)
     service.configLoaded = true
     service.modesUpdated()
   }
 
-  function backupBrokenConfig() {
+  // The recovery copy is the bytes that were actually read, not a second open
+  // of the same name. Copying by path re-resolved it, so what landed in the
+  // backup was whatever the name pointed at by then rather than what failed to
+  // parse — and a detached copy nobody was watching did the writing.
+  function backupBrokenConfig(raw) {
     var backup = service.configPath + ".corrupt"
-    log("warn", "Copied the unreadable omara.json to " + backup + " before starting from defaults")
-    Quickshell.execDetached(["bash", "-lc", 'cp -f -- "$1" "$2"', "bash", service.configPath, backup])
+    backupFile.path = backup
+    backupFile.setText(String(raw === undefined || raw === null ? "" : raw))
+    log("warn", "Saved the unreadable omara.json as " + backup + " before starting from defaults")
     Quickshell.execDetached([
       "omarchy-notification-send", "--app-name", "Omara", "-u", "normal",
       "Omara", "omara.json could not be read. A copy was saved as omara.json.corrupt."
@@ -108,8 +273,14 @@ Item {
   }
 
   FileView {
+    id: backupFile
+    atomicWrites: true
+    printErrors: false
+  }
+
+  FileView {
     id: configFile
-    path: service.configPath
+    path: service.configPathOk ? service.configPath : ""
     watchChanges: true
     atomicWrites: true
     printErrors: false
@@ -121,23 +292,28 @@ Item {
       service.configFileSeen = true
       service.loadConfig(text)
     }
-    onLoadFailed: if (!service.configLoaded) service.loadConfig("")
+    onLoadFailed: if (service.configPathOk && !service.configLoaded) service.loadConfig("")
   }
 
   property bool configFileSeen: false
 
   // A file watcher dies when the file is replaced by rename; this heals it.
+  // The guard runs again first: a path that has become a FIFO or a symlink
+  // since startup must not be reopened just because it once passed.
   Timer {
     id: reconcileTimer
     interval: 60000
     repeat: true
     running: true
-    onTriggered: configFile.reload()
+    onTriggered: {
+      service.checkPaths()
+      if (service.configPathOk) configFile.reload()
+    }
   }
 
   FileView {
     id: stateFile
-    path: service.statePath
+    path: service.statePathOk ? service.statePath : ""
     watchChanges: false
     atomicWrites: true
     printErrors: false

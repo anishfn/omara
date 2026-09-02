@@ -755,6 +755,27 @@ function parseProbeOutput(text) {
   return out
 }
 
+// The path guard's report. Same ceilings, same null-prototype reasoning: the
+// keys are looked up by name, and only the three verdicts the guard can emit
+// are accepted, so an unrecognised line is dropped rather than interpreted.
+function parseGuardOutput(text) {
+  var out = Object.create(null)
+  var raw = typeof text === "string" ? text : ""
+  if (raw.length > PROBE_MAX_BYTES) raw = raw.slice(0, PROBE_MAX_BYTES)
+  var lines = raw.split("\n")
+  var limit = lines.length < PROBE_MAX_LINES ? lines.length : PROBE_MAX_LINES
+  for (var i = 0; i < limit; i++) {
+    var parts = lines[i].split("\t")
+    if (parts[0] !== "GUARD") continue
+    var key = probeField(parts[1])
+    var verdict = probeField(parts[2])
+    if (key === "") continue
+    if (verdict !== "ok" && verdict !== "warn" && verdict !== "refuse") continue
+    out[key] = { verdict: verdict, detail: probeField(parts[3]) }
+  }
+  return out
+}
+
 function emptyProbeResult() {
   return { wallpaper: "", theme: "", missing: Object.create(null) }
 }
@@ -1092,6 +1113,7 @@ if (typeof module !== "undefined" && module.exports) {
     PLACEMENT_TTL_MS: PLACEMENT_TTL_MS,
     placementKeys: placementKeys,
     parseProbeOutput: parseProbeOutput,
+    parseGuardOutput: parseGuardOutput,
     emptyProbeResult: emptyProbeResult,
     prunePlacements: prunePlacements,
     matchPlacement: matchPlacement,
