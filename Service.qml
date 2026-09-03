@@ -1380,7 +1380,7 @@ Item {
       }
     }
     onStatusChanged: if (status === Loader.Error)
-      service.log("warn", "Workspace Modes switch dialog failed to load: " + (errorString ? errorString() : "unknown error"))
+      service.log("warn", "Workspace Modes switch dialog failed to load; see the shell log for the QML error")
   }
 
   // ---------------------------------------------------------------- themes
@@ -1627,7 +1627,7 @@ Item {
       }
     }
     onStatusChanged: if (status === Loader.Error)
-      service.log("warn", "Workspace Modes editor failed to load: " + (errorString ? errorString() : "unknown error"))
+      service.log("warn", "Workspace Modes editor failed to load; see the shell log for the QML error")
   }
 
   property var pendingEditorMode: null

@@ -1447,3 +1447,52 @@ test("a workspace tab says what is in it", () => {
   assert.match(qml, /readonly property int filled: Model\.paneApps\(modelData\.tree, \[\]\)\.length/)
   assert.match(qml, /visible: cell\.filled > 0/)
 })
+
+test("no QML object sets the same property twice", () => {
+  // qmllint does not catch this. Qt does, at load time, by refusing the whole
+  // type — a duplicate `bordered:` on one Button took the entire workspace
+  // canvas out and with it the editor, on a commit that passed lint and all
+  // of these tests. So the check lives here.
+  const duplicates = (source) => {
+    const found = []
+    // Scope stack. Only object bodies count: a JS block after `onClicked:`
+    // has colons in it that are not property assignments.
+    const stack = [{ object: false, seen: new Map() }]
+    source.split("\n").forEach((raw, i) => {
+      const line = raw.replace(/\/\/.*$/, "")
+      const top = stack[stack.length - 1]
+      if (top.object) {
+        const m = line.match(/^\s*([A-Za-z_]\w*(?:\.\w+)*)\s*:(?!:)/)
+        if (m && !/^(function|case|default|property|readonly|signal|required)$/.test(m[1])) {
+          if (top.seen.has(m[1])) found.push(`line ${i + 1}: ${m[1]} (also line ${top.seen.get(m[1])})`)
+          else top.seen.set(m[1], i + 1)
+        }
+      }
+      for (const ch of line) {
+        if (ch === "{") {
+          // A type declaration opens an object body; anything else does not.
+          const isObject = /(^|\s)[A-Z][\w.]*\s*(\{|$)/.test(line) && !/\bfunction\b/.test(line)
+          stack.push({ object: isObject, seen: new Map() })
+        } else if (ch === "}") {
+          if (stack.length > 1) stack.pop()
+        }
+      }
+    })
+    return found
+  }
+
+  // The detector has to actually detect; prove it on the shape that broke.
+  assert.deepEqual(
+    duplicates(['Item {', '  Button {', '    bordered: true', '    selected: false',
+                '    bordered: true', '  }', '}'].join("\n")),
+    ["line 5: bordered (also line 3)"])
+  // And must not fire on the same name in two different objects, or on JS.
+  assert.deepEqual(
+    duplicates(['Item {', '  Button { bordered: true }', '  Button { bordered: true }',
+                '  onClicked: { var a = {x: 1}; var b = {x: 2} }', '}'].join("\n")),
+    [])
+
+  for (const file of qmlFiles) {
+    assert.deepEqual(duplicates(read(file)), [], `${file} sets a property twice`)
+  }
+})

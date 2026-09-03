@@ -293,10 +293,9 @@ Item {
             bordered: true
             focusable: true
             selected: canvas.tab === index
-            // Borrow the accent border the selected pane uses, so the tab you
-            // have hold of is obvious while the strip rearranges around it.
-            bordered: true
             accent: Color.accent
+            // Borrow the hover state while the tab is being dragged, so the
+            // one you have hold of is obvious as the strip rearranges.
             hasCursor: canvas.reordering === index || tabMouse.containsMouse
             foreground: canvas.foreground
             fontFamily: canvas.fontFamily
