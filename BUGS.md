@@ -5,6 +5,22 @@ work; none of them is fixed yet. Roughly ordered by how much damage it can do.
 
 ---
 
+### 0. The editor holds an exclusive keyboard grab for as long as it is open
+
+`EditorWindow.qml` — `WlrKeyboardFocus.Exclusive`
+
+The overlay takes every key on the system while it is up, so anything typed
+anywhere else — a terminal, an editor, a browser — is delivered to whichever
+control here happens to have focus. Enter and Space activate a focused button,
+which is enough to create, capture, or delete a mode from typing that was never
+aimed at this panel. Observed: a session left with the panel open picked up
+three unrelated actions from ordinary typing.
+
+Exclusive focus is right while you are *using* the panel; what is missing is
+giving it up when you are not. Fix: drop to `OnDemand`, or close on focus loss.
+
+---
+
 ### 1. `deactivate` can run in the middle of an activation
 
 `Service.qml` — `deactivateMode()`
@@ -126,19 +142,7 @@ supersession that already exists within each.
 
 ---
 
-### 9. `pane` has an undocumented value
-
-`EditorWindow.qml` — `property string pane`
-
-The comment says `edit | create | settings | log`. `stageImport` also sets
-`"import"`, which is a real pane with real UI. Small, but the comment is the
-only place the state machine is written down.
-
-Fix: add it to the comment.
-
----
-
-### 10. A renamed copy skips normalization
+### 9. A renamed copy skips normalization
 
 `Model.js` — `importModes()`, the `copy` branch
 
