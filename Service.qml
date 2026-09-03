@@ -551,9 +551,9 @@ Item {
     service.configRefusal = reason
     log("warn", "Refusing to read or write omara.json: " + reason)
     notify([
-      "omarchy-notification-send", "--app-name", "Omara", "-u", "critical", "Omara",
+      "omarchy-notification-send", "--app-name", "Workspace Modes", "-u", "critical", "Workspace Modes",
       "omara.json was not used because " + reason
-        + ". Omara started with no modes and will not write to that path. Nothing was changed or deleted."
+        + ". Workspace Modes started with no modes and will not write to that path. Nothing was changed or deleted."
     ])
   }
 
@@ -568,8 +568,8 @@ Item {
       else log("warn", "Could not save " + backup + ": " + detail)
     })
     notify([
-      "omarchy-notification-send", "--app-name", "Omara", "-u", "normal",
-      "Omara", "omara.json could not be read. A copy was saved as omara.json.corrupt."
+      "omarchy-notification-send", "--app-name", "Workspace Modes", "-u", "normal",
+      "Workspace Modes", "omara.json could not be read. A copy was saved as omara.json.corrupt."
     ])
   }
 
@@ -1249,7 +1249,7 @@ Item {
         + (current ? "" : " (superseded by a later switch)"))
       if (!current) return
       if (!silent && config.behavior.showNotifications !== false)
-        notify(["omarchy-notification-send", "--app-name", "Omara", "Omara", "No mode. " + name + " turned off."])
+        notify(["omarchy-notification-send", "--app-name", "Workspace Modes", "Workspace Modes", "No mode. " + name + " turned off."])
       service.activationFinished("", 0)
     })
     return true
@@ -1257,7 +1257,7 @@ Item {
 
   function notifySummary(ctx, summary) {
     if (config.behavior.showNotifications === false) return
-    var argv = ["omarchy-notification-send", "--app-name", "Omara"]
+    var argv = ["omarchy-notification-send", "--app-name", "Workspace Modes"]
     if (ctx.icon) argv = argv.concat(["-g", String(ctx.icon)])
     if (summary.warnings > 0) argv = argv.concat(["-u", "normal"])
     argv.push("Mode: " + ctx.name)
@@ -1380,7 +1380,7 @@ Item {
       }
     }
     onStatusChanged: if (status === Loader.Error)
-      service.log("warn", "Omara switch dialog failed to load: " + (errorString ? errorString() : "unknown error"))
+      service.log("warn", "Workspace Modes switch dialog failed to load: " + (errorString ? errorString() : "unknown error"))
   }
 
   // ---------------------------------------------------------------- themes
@@ -1599,7 +1599,7 @@ Item {
     log("info", "Trigger: " + decision.reason + " → asking about " + ctx.name)
     notify([
       "omarchy-notification-send",
-      "--app-name", "Omara",
+      "--app-name", "Workspace Modes",
       "-u", "normal",
       "Switch to " + ctx.name + "?",
       decision.reason + ", click to switch",
@@ -1627,7 +1627,7 @@ Item {
       }
     }
     onStatusChanged: if (status === Loader.Error)
-      service.log("warn", "Omara editor failed to load: " + (errorString ? errorString() : "unknown error"))
+      service.log("warn", "Workspace Modes editor failed to load: " + (errorString ? errorString() : "unknown error"))
   }
 
   property var pendingEditorMode: null

@@ -1,11 +1,11 @@
 {
   "schemaVersion": 1,
   "id": "io.github.anishfn.omara",
-  "name": "Omara",
+  "name": "Workspace Modes",
   "version": "1.0.0",
   "author": "anishfn",
   "license": "MIT",
-  "description": "Switch your entire Omarchy desktop into the way you work: workspaces, notifications, audio, wallpaper, theme, apps, and commands, per mode.",
+  "description": "Switch your whole Omarchy desktop into the way you work: which apps open on which workspaces and in what layout, plus notifications, audio, wallpaper, theme and commands — one mode at a time.",
   "repository": "https://github.com/anishfn/omara",
   "keywords": [
     "productivity",
@@ -25,8 +25,8 @@
     "service": "Service.qml"
   },
   "barWidget": {
-    "displayName": "Omara",
-    "description": "Show the active desktop mode and switch between modes.",
+    "displayName": "Workspace Modes",
+    "description": "Show the workspace mode you are in, and switch between them.",
     "category": "Productivity",
     "allowMultiple": false,
     "defaultSection": "left",

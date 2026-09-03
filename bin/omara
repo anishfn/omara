@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# CLI for the Omara plugin.
+# CLI for the Workspace Modes plugin.
 # Every subcommand forwards to the plugin's `omara` IPC target in the running
 # shell; the shell owns the config file, so nothing here writes to it directly.
 
@@ -39,7 +39,7 @@ Examples:
   $PROGRAM export gaming > gaming.json
 
 Bind whatever you like in your Hyprland config, for example:
-  bindd = SUPER, C, Omara, exec, $PROGRAM menu
+  bindd = SUPER, C, Workspace Modes, exec, $PROGRAM menu
 USAGE
 }
 
@@ -64,7 +64,7 @@ call() {
         fail "omarchy-shell is not running"
         ;;
       *"Target not found"*)
-        fail "the Omara plugin is not enabled (omarchy plugin enable io.github.anishfn.omara)"
+        fail "the Workspace Modes plugin is not enabled (omarchy plugin enable io.github.anishfn.omara)"
         ;;
     esac
     fail "${output:-IPC call failed}"

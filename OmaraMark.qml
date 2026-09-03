@@ -1,7 +1,7 @@
 import QtQuick
 import qs.Commons
 
-// The Omara mark: the shape a dwindle layout makes — one pane down the left,
+// The Workspace Modes mark: the shape a dwindle layout makes — one pane down the left,
 // two stacked beside it. Drawn rather than loaded, so it takes the bar's own
 // colour and stays sharp at the size the bar asks for.
 //
