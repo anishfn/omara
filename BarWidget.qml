@@ -44,6 +44,8 @@ BarWidget {
   property int cursorIndex: 0
   property bool cursorActive: false
 
+  // The three actions are always on screen now, including on an empty popup,
+  // so the cursor can no longer land on a row that is not being drawn.
   readonly property int actionCount: 3
   readonly property int rowCount: modes.length + actionCount
 
@@ -187,38 +189,19 @@ BarWidget {
         anchors.top: parent.top
         spacing: Style.space(6)
 
-        PanelSectionHeader {
-          text: "Mode"
+        // No section header: this popup is summoned from the mode widget and
+        // its rows are modes. A line that says "Mode" over them is a row spent
+        // on something the reader already knows.
+        Text {
           width: parent.width
-          foreground: root.foreground
-          fontFamily: root.fontFamily
-        }
-
-        Column {
-          width: parent.width
-          spacing: Style.space(8)
           visible: root.modes.length === 0
-
-          Text {
-            width: parent.width
-            wrapMode: Text.Wrap
-            textFormat: Text.PlainText
-            text: "Your desktop, organized around what you're doing.\n\nCreate a mode to get started."
-            color: root.dim
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.bodySmall
-          }
-
-          Button {
-            width: parent.width
-            text: "Create a mode"
-            leftAlign: true
-            bordered: true
-            foreground: root.foreground
-            fontFamily: root.fontFamily
-            hasCursor: root.cursorActive && root.cursorIndex === 0
-            onClicked: root.newMode()
-          }
+          wrapMode: Text.Wrap
+          textFormat: Text.PlainText
+          text: "No modes yet. A mode is a way your desktop is set up — "
+            + "what opens, where, and how it behaves."
+          color: root.dim
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.bodySmall
         }
 
         Repeater {
@@ -250,41 +233,46 @@ BarWidget {
           visible: root.modes.length > 0
         }
 
-        Button {
+        // One row, not three. These are what you do *to* modes rather than
+        // more modes, and stacking them full width made the popup twice as
+        // tall as the list it was there to show.
+        Row {
           width: parent.width
-          iconText: Model.Glyph.add
-          text: "New mode"
-          leftAlign: true
-          visible: root.modes.length > 0
-          foreground: root.foreground
-          fontFamily: root.fontFamily
-          hasCursor: root.cursorActive && root.cursorIndex === root.modes.length
-          onClicked: root.newMode()
-        }
+          spacing: Style.space(4)
 
-        Button {
-          width: parent.width
-          iconText: Model.Glyph.settings
-          text: "Manage modes"
-          leftAlign: true
-          visible: root.modes.length > 0
-          foreground: root.foreground
-          fontFamily: root.fontFamily
-          hasCursor: root.cursorActive && root.cursorIndex === root.modes.length + 1
-          onClicked: root.manageModes()
-        }
+          Button {
+            iconText: Model.Glyph.add
+            text: "New"
+            bordered: true
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+            tooltipText: "Start a mode from nothing"
+            hasCursor: root.cursorActive && root.cursorIndex === root.modes.length
+            onClicked: root.newMode()
+          }
 
-        Button {
-          width: parent.width
-          iconText: Model.Glyph.power
-          text: "Disable mode"
-          leftAlign: true
-          visible: root.modes.length > 0
-          enabled: root.activeMode !== null
-          foreground: root.activeMode ? root.foreground : root.dim
-          fontFamily: root.fontFamily
-          hasCursor: root.cursorActive && root.cursorIndex === root.modes.length + 2
-          onClicked: root.disableMode()
+          Button {
+            iconText: Model.Glyph.settings
+            text: "Manage"
+            bordered: true
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+            tooltipText: "Open the editor"
+            hasCursor: root.cursorActive && root.cursorIndex === root.modes.length + 1
+            onClicked: root.manageModes()
+          }
+
+          Button {
+            iconText: Model.Glyph.power
+            bordered: true
+            enabled: root.activeMode !== null
+            foreground: root.activeMode ? root.foreground : root.dim
+            fontFamily: root.fontFamily
+            tooltipText: "Turn the active mode off"
+            Accessible.name: "Turn the active mode off"
+            hasCursor: root.cursorActive && root.cursorIndex === root.modes.length + 2
+            onClicked: root.disableMode()
+          }
         }
       }
     }
