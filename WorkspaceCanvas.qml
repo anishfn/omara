@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Layouts
 import Quickshell
 import qs.Commons
 import qs.Ui
@@ -31,8 +32,13 @@ Item {
   property string selectedPath: ""
   property string query: ""
 
-  readonly property int boardHeight: Style.space(250)
-  readonly property int gap: Math.max(3, Style.space(4))
+  // The tab currently being renamed in place, or -1. A tab is a button until
+  // you click the one you are already on, and a field after that.
+  property int renaming: -1
+
+  // The space between panes is space. Wide enough to read as a gap rather
+  // than a seam, and nothing is drawn in it until you reach for it.
+  readonly property int gap: Style.space(8)
 
   readonly property var tree: (tab >= 0 && tab < layouts.length) ? layouts[tab].tree : Model.paneLeaf("")
   readonly property var rects: Model.paneRects(tree, board.width, board.height, canvas.gap)
@@ -40,13 +46,20 @@ Item {
   readonly property string landing: draft && draft.workspaces && draft.workspaces.target !== null
     && draft.workspaces.target !== undefined ? String(draft.workspaces.target) : ""
 
-  height: column.implicitHeight
-
   // A layout can go away under the tab index — a delete, a revert, a different
   // mode — so the index is clamped where it is read from, not where it is set.
   onLayoutsChanged: {
     if (tab >= layouts.length) tab = Math.max(0, layouts.length - 1)
+    if (renaming >= layouts.length) renaming = -1
     if (Model.paneAt(canvas.tree, canvas.selectedPath) === null) canvas.selectedPath = ""
+  }
+
+  // A different mode is a different set of workspaces; nothing about the last
+  // one should still be selected, being renamed, or half dragged.
+  onDraftChanged: {
+    canvas.renaming = -1
+    canvas.selectedPath = ""
+    canvas.dragCancel()
   }
 
   // ------------------------------------------------------------- hit testing
@@ -135,7 +148,10 @@ Item {
     canvas.dragX = x
     canvas.dragY = y
     var over = canvas.tabUnder(x, y)
-    if (over >= 0 && over !== canvas.tab) canvas.tab = over
+    if (over >= 0 && over !== canvas.tab) {
+      canvas.tab = over
+      canvas.renaming = -1
+    }
     var local = board.mapFromItem(canvas, x, y)
     var pane = canvas.paneUnder(local.x, local.y)
     canvas.overPane = pane !== null
@@ -174,59 +190,95 @@ Item {
     editor.placeApplication(canvas.tab, canvas.selectedPath, "center",
       { desktopId: String(entry.id), command: "", enabled: true })
   }
-
   // ------------------------------------------------------------------ layout
 
-  Column {
+  ColumnLayout {
     id: column
-    anchors.left: parent.left
-    anchors.right: parent.right
-    anchors.top: parent.top
+    anchors.fill: parent
     spacing: Style.space(8)
 
     // ------------------------------------------------------- workspace tabs
-    Row {
-      id: tabsRow
-      width: column.width
+    //
+    // One tab per workspace, sharing the width the way the workspaces share
+    // the desktop. Clicking the tab you are already on turns it into the
+    // field that names it, so a workspace is renamed where it is read.
+    RowLayout {
+      Layout.fillWidth: true
       spacing: Style.space(4)
 
       Repeater {
         id: tabRepeater
         model: canvas.layouts
 
-        Button {
+        Item {
           required property var modelData
           required property int index
 
+          readonly property bool editing: canvas.renaming === index
           readonly property bool isLanding: canvas.landing !== "" && canvas.landing === modelData.workspace
 
-          text: modelData.workspace === "" ? "Any" : modelData.workspace
-          bordered: true
-          selected: canvas.tab === index
-          focusable: true
-          foreground: canvas.foreground
-          fontFamily: canvas.fontFamily
-          tooltipText: modelData.workspace === ""
-            ? "Opens wherever you happen to be"
-            : (isLanding ? "Workspace " + modelData.workspace + "  ·  you land here"
-                         : "Workspace " + modelData.workspace)
-          Accessible.name: modelData.workspace === "" ? "Any workspace" : "Workspace " + modelData.workspace
-          onClicked: {
-            canvas.tab = index
-            canvas.selectedPath = ""
+          // Wide enough to read, narrow enough that one workspace does not
+          // look like a title bar. They share the leftover room between them
+          // and stop growing well before the board does.
+          Layout.fillWidth: true
+          Layout.preferredWidth: Style.space(64)
+          Layout.maximumWidth: Style.space(96)
+          Layout.preferredHeight: tabField.implicitHeight
+
+          Button {
+            anchors.fill: parent
+            visible: !parent.editing
+            text: modelData.workspace === "" ? "Any" : modelData.workspace
+            bordered: true
+            focusable: true
+            selected: canvas.tab === index
+            foreground: canvas.foreground
+            fontFamily: canvas.fontFamily
+            tooltipText: modelData.workspace === ""
+              ? "Opens wherever you happen to be" : "Click again to rename"
+            Accessible.name: modelData.workspace === "" ? "Any workspace" : "Workspace " + modelData.workspace
+            onClicked: {
+              if (canvas.tab === index) { canvas.renaming = index; return }
+              canvas.tab = index
+              canvas.selectedPath = ""
+              canvas.renaming = -1
+            }
+
+            Rectangle {
+              visible: parent.parent.isLanding
+              width: Style.space(5)
+              height: width
+              radius: width / 2
+              color: Color.accent
+              anchors.top: parent.top
+              anchors.right: parent.right
+              anchors.margins: Style.space(3)
+            }
           }
 
-          // The landing workspace is marked on its own tab rather than named
-          // again in a field somewhere else on the form.
-          Rectangle {
-            visible: parent.isLanding
-            width: Style.space(5)
-            height: width
-            radius: width / 2
-            color: Color.accent
-            anchors.top: parent.top
-            anchors.right: parent.right
-            anchors.margins: Style.space(3)
+          TextField {
+            id: tabField
+            anchors.fill: parent
+            visible: parent.editing
+            horizontalAlignment: TextInput.AlignHCenter
+            placeholderText: "blank = anywhere"
+            foreground: canvas.foreground
+            Accessible.name: "Name this workspace"
+
+            onVisibleChanged: if (visible) {
+              text = modelData.workspace
+              forceActiveFocus()
+              selectAll()
+            }
+
+            // A name Hyprland cannot use, or one another tab already has, is
+            // refused rather than half-applied; the field going back to what
+            // it was is what says so.
+            onEditingFinished: {
+              if (!canvas.editor.renameWorkspace(index, text)) text = modelData.workspace
+              canvas.renaming = -1
+            }
+            Keys.onEscapePressed: canvas.renaming = -1
           }
         }
       }
@@ -239,52 +291,22 @@ Item {
         fontFamily: canvas.fontFamily
         enabled: canvas.layouts.length < Model.MAX_LAYOUTS
         Accessible.name: "Add a workspace"
+        bordered: true
         onClicked: {
           var index = canvas.editor.addWorkspace()
           if (index >= 0) {
             canvas.tab = index
             canvas.selectedPath = ""
+            canvas.renaming = -1
           }
         }
       }
-    }
 
-    // ------------------------------------------------- the workspace's tools
-    Row {
-      width: column.width
-      spacing: Style.space(6)
-
-      Text {
-        anchors.verticalCenter: parent.verticalCenter
-        text: "Workspace"
-        color: canvas.dim
-        font.family: canvas.fontFamily
-        font.pixelSize: Style.font.caption
-      }
-
-      TextField {
-        id: workspaceField
-        width: Style.space(120)
-        anchors.verticalCenter: parent.verticalCenter
-        enabled: canvas.tab >= 0 && canvas.tab < canvas.layouts.length
-        text: canvas.tab >= 0 && canvas.tab < canvas.layouts.length ? canvas.layouts[canvas.tab].workspace : ""
-        placeholderText: "blank = wherever you are"
-        foreground: canvas.foreground
-        Accessible.name: "Workspace this tab opens on"
-        // A name Hyprland cannot use, or one another tab already has, is
-        // refused rather than half-applied; putting the old value back is what
-        // says so.
-        onEditingFinished: {
-          if (canvas.tab < 0 || canvas.tab >= canvas.layouts.length) return
-          if (!canvas.editor.renameWorkspace(canvas.tab, text))
-            text = canvas.layouts[canvas.tab].workspace
-        }
-      }
+      Item { Layout.preferredWidth: Style.space(8); Layout.preferredHeight: 1 }
 
       Button {
-        anchors.verticalCenter: parent.verticalCenter
-        text: "Land here"
-        bordered: true
+        iconText: Model.Glyph.landing
+        tooltipText: "Leave you on this workspace once the mode is up"
         focusable: true
         enabled: canvas.tab >= 0 && canvas.tab < canvas.layouts.length
           && canvas.layouts[canvas.tab].workspace !== ""
@@ -292,15 +314,12 @@ Item {
           && canvas.landing !== "" && canvas.landing === canvas.layouts[canvas.tab].workspace
         foreground: enabled ? canvas.foreground : canvas.dim
         fontFamily: canvas.fontFamily
-        tooltipText: "Leave you on this workspace once the mode is up"
         Accessible.name: "Land on this workspace"
+        bordered: true
         onClicked: canvas.editor.setLandingWorkspace(selected ? "" : canvas.layouts[canvas.tab].workspace)
       }
 
-      Item { width: Style.space(2); height: 1 }
-
       Button {
-        anchors.verticalCenter: parent.verticalCenter
         iconText: Model.Glyph.remove
         tooltipText: "Remove this workspace and everything on it"
         focusable: true
@@ -308,25 +327,32 @@ Item {
         foreground: enabled ? Color.urgent : canvas.dim
         fontFamily: canvas.fontFamily
         Accessible.name: "Remove this workspace"
-        onClicked: canvas.editor.removeWorkspace(canvas.tab)
+        bordered: true
+        onClicked: {
+          canvas.renaming = -1
+          canvas.editor.removeWorkspace(canvas.tab)
+        }
       }
+
+      Item { Layout.fillWidth: true; Layout.preferredHeight: 1 }
     }
 
-    // --------------------------------------------------- applications | board
-    Row {
-      width: column.width
-      height: canvas.boardHeight
+    // -------------------------------------------------- applications | board
+    RowLayout {
+      Layout.fillWidth: true
+      Layout.fillHeight: true
       spacing: Style.space(10)
 
       // ----------------------------------------------------------- app list
-      Column {
+      ColumnLayout {
         id: picker
-        width: Math.min(Style.space(210), Math.max(Style.space(140), parent.width * 0.3))
-        height: parent.height
+        Layout.fillHeight: true
+        Layout.preferredWidth: Style.space(200)
+        Layout.maximumWidth: Style.space(200)
         spacing: Style.space(6)
 
         TextField {
-          width: picker.width
+          Layout.fillWidth: true
           placeholderText: "Search apps…"
           foreground: canvas.foreground
           Accessible.name: "Search installed applications"
@@ -335,8 +361,8 @@ Item {
 
         ListView {
           id: appList
-          width: picker.width
-          height: Math.max(0, picker.height - y)
+          Layout.fillWidth: true
+          Layout.fillHeight: true
           clip: true
           spacing: Style.space(1)
           boundsBehavior: Flickable.StopAtBounds
@@ -441,12 +467,15 @@ Item {
       // -------------------------------------------------------------- board
       Rectangle {
         id: boardFrame
-        width: Math.max(0, parent.width - picker.width - parent.spacing)
-        height: parent.height
+        Layout.fillWidth: true
+        Layout.fillHeight: true
         radius: Style.cornerRadius
-        color: Util.alpha(canvas.foreground, 0.03)
+        // The panes are the objects. The board they sit on is only a region,
+        // so it draws nothing until there is something to catch.
+        color: "transparent"
         border.width: Math.max(1, Style.normalBorderWidth)
-        border.color: Util.alpha(canvas.foreground, canvas.dragging ? 0.4 : 0.14)
+        border.color: Util.alpha(Color.accent, canvas.dragging ? 0.45 : 0)
+        Behavior on border.color { ColorAnimation { duration: 120 } }
 
         Item {
           id: board
@@ -479,6 +508,9 @@ Item {
                 : Util.alpha(canvas.foreground,
                     canvas.pointerPath === modelData.path ? 0.4
                       : (modelData.app === "" ? 0.12 : 0.22))
+              // A pane is as big as it is. Its contents do not get to spill
+              // into the pane beside it when the split leaves it narrow.
+              clip: true
 
               Accessible.role: Accessible.Pane
               Accessible.name: modelData.app === "" ? "Empty pane" : canvas.editor.applicationName(app)
@@ -532,11 +564,14 @@ Item {
                 }
 
                 // A custom command is edited where it runs, not in a list
-                // somewhere else. Desktop entries have nothing to type.
+                // somewhere else — but only once you have picked the pane, so
+                // a board of them is a board of names rather than of inputs.
                 TextField {
                   width: parent.width
-                  visible: parent.parent.app && !parent.parent.app.desktopId
-                    && parent.parent.width > Style.space(150)
+                  visible: parent.parent.chosen && parent.parent.app
+                    && !parent.parent.app.desktopId
+                    && parent.parent.width > Style.space(160)
+                    && parent.parent.height > Style.space(96)
                   text: parent.parent.app ? String(parent.parent.app.command || "") : ""
                   placeholderText: "Command"
                   foreground: canvas.foreground
@@ -545,14 +580,30 @@ Item {
                 }
               }
 
-              Text {
+              Column {
                 anchors.centerIn: parent
+                width: parent.width - Style.space(12)
                 visible: modelData.app === ""
-                horizontalAlignment: Text.AlignHCenter
-                text: Model.Glyph.add + "\ndrop an app"
-                color: canvas.dim
-                font.family: canvas.fontFamily
-                font.pixelSize: Style.font.caption
+                spacing: Style.space(2)
+
+                Text {
+                  anchors.horizontalCenter: parent.horizontalCenter
+                  text: Model.Glyph.add
+                  color: canvas.dim
+                  font.family: canvas.fontFamily
+                  font.pixelSize: Style.font.iconLarge
+                }
+
+                Text {
+                  width: parent.width
+                  visible: parent.parent.height > Style.space(64)
+                  horizontalAlignment: Text.AlignHCenter
+                  text: "drop an app here"
+                  color: canvas.dim
+                  font.family: canvas.fontFamily
+                  font.pixelSize: Style.font.caption
+                  elide: Text.ElideRight
+                }
               }
             }
           }
@@ -595,7 +646,14 @@ Item {
               if (canvas.dragging) {
                 var p = canvas.mapFromItem(boardMouse, mouse.x, mouse.y)
                 canvas.dragDrop(p.x, p.y)
+                boardMouse.armed = false
+                return
               }
+              // An empty pane is a slot with nothing to select, so a click on
+              // one asks what goes in it rather than quietly highlighting it.
+              var pane = canvas.paneUnder(mouse.x, mouse.y)
+              if (boardMouse.armed && pane && pane.app === "" && pane.path === boardMouse.pressPath)
+                canvas.editor.openAppPicker(canvas.tab, pane.path)
               boardMouse.armed = false
             }
 
@@ -636,13 +694,17 @@ Item {
               width: modelData.width + (modelData.direction === "row" ? reach * 2 : 0)
               height: modelData.height + (modelData.direction === "column" ? reach * 2 : 0)
 
+              // A short grip in the middle of the gap, and only while the
+              // pointer is on it. A line drawn down every seam made a layout
+              // of four panes look like a table of contents.
               Rectangle {
                 anchors.centerIn: parent
-                width: modelData.direction === "row" ? Math.max(1, modelData.width) : parent.width
-                height: modelData.direction === "column" ? Math.max(1, modelData.height) : parent.height
-                radius: width < height ? width / 2 : height / 2
-                color: Util.alpha(canvas.foreground, grip.containsMouse || grip.pressed ? 0.55 : 0.16)
-                Behavior on color { ColorAnimation { duration: 90 } }
+                width: modelData.direction === "row" ? Style.space(3) : Style.space(24)
+                height: modelData.direction === "row" ? Style.space(24) : Style.space(3)
+                radius: Math.min(width, height) / 2
+                color: Util.alpha(canvas.foreground, 0.55)
+                opacity: grip.containsMouse || grip.pressed ? 1 : 0
+                Behavior on opacity { NumberAnimation { duration: 90 } }
               }
 
               MouseArea {
@@ -673,12 +735,15 @@ Item {
             Row {
               required property var modelData
 
-              readonly property bool shown: !canvas.dragging
+              // Only on a pane with something in it: an empty pane has nothing
+              // to split, nothing to skip, and closing it is what dropping an
+              // application into it undoes anyway.
+              readonly property bool shown: !canvas.dragging && modelData.app !== ""
                 && (canvas.selectedPath === modelData.path || canvas.pointerPath === modelData.path)
                 && modelData.width > Style.space(90) && modelData.height > Style.space(40)
 
-              x: modelData.x + modelData.width - width - Style.space(4)
-              y: modelData.y + Style.space(4)
+              x: modelData.x + modelData.width - width - Style.space(6)
+              y: modelData.y + Style.space(6)
               visible: shown
               spacing: Style.space(2)
 
@@ -705,7 +770,6 @@ Item {
               PanelActionButton {
                 iconText: Model.Glyph.power
                 tooltipText: "Open this one with the mode, or skip it"
-                visible: modelData.app !== ""
                 size: Style.space(20)
                 fontSize: Style.font.caption
                 foreground: canvas.foreground
@@ -736,12 +800,13 @@ Item {
 
     // --------------------------------------------------------------- legend
     Text {
-      width: column.width
+      Layout.fillWidth: true
       wrapMode: Text.Wrap
       textFormat: Text.PlainText
-      text: "Drag an app in from the left  ·  drop it on a pane's edge to split it  ·  "
-        + "drag a pane onto a tab to move it  ·  drag a divider to resize\n"
-        + "Panes are the order things open in, read left to right. The tiling itself is Hyprland's."
+      // The first clause is the one a new mode needs: the tabs are not a
+      // toolbar, they are the workspaces this mode opens on.
+      text: "Each tab is a workspace  ·  drag an app in from the left  ·  "
+        + "drop one on a pane's edge to split it  ·  drag a divider to resize"
       color: canvas.dim
       font.family: canvas.fontFamily
       font.pixelSize: Style.font.caption

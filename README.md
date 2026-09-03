@@ -220,8 +220,8 @@ Those three are the only paths Omara writes.
 1. **Click the widget** in your bar. On first run it reads `○ No mode`.
    There are no modes until you make one.
 2. **Create a mode.** Fastest way: set your desktop up the way you like it,
-   then pick **Current desktop**, which captures what is open, where, and how.
-   Otherwise pick **Blank** and fill it in yourself. Nothing is preloaded.
+   then press the camera, which captures what is open, where, and how.
+   Otherwise press **+** for an empty one. Nothing is preloaded.
 3. **Lay out your workspaces.** Under *Workspaces*, drag apps from the list on
    the left onto the canvas on the right. Each tab is a workspace: terminal on
    1, browser on 2, chat on 3. Drop an app on the edge of a pane to split it.
@@ -243,17 +243,26 @@ one, and you end up on the workspace you chose.
 
 Right-click the bar widget, or run `omara manage`.
 
-The left pane lists your modes, the right pane edits the selected one.
-Nothing is written until you press **Save**, and leaving with unsaved changes
-asks first, so nothing is lost by accident.
+Your modes are the chips along the top; the one you are on is the one below.
+The panel is the workspace canvas and almost nothing else, because what a
+mode opens is the part you actually edit.
 
+| Up top | |
+|---|---|
+| **+** | A new, empty mode. No screen in between. |
+| **Camera** | A mode made out of the desktop as it is now |
+| **Options** | Name, icon, environment, commands, triggers — and Duplicate and Delete |
+| **Test** | Save, close, and switch to this mode, so you can see it |
+| **Save** | Nothing is written until you press it |
+
+Leaving with unsaved changes asks first, so nothing is lost by accident.
 Renaming a mode keeps its `id`, so keybindings and scripts keep working.
-**Duplicate** copies the whole mode when you want a variant of one you
-already have. Hovering a mode on the left reveals arrows to reorder it.
+**Activity** and **Settings**, bottom right, are the log of what modes have
+changed and the behavior switches that apply to all of them.
 
 | Shortcut | |
 |---|---|
-| `Tab` | Jump into the form, then move field to field |
+| `Tab` | Jump into Options, then move field to field |
 | `Ctrl+S` | Save |
 | `Ctrl+N` | New mode |
 | `Ctrl+D` | Duplicate the selected mode |
@@ -308,7 +317,7 @@ in a mode without launching it every time.
 
 ![Choosing an icon](screenshots/icon-picker.png)
 
-The icon box next to the name opens a searchable grid. Search by what you are
+The icon box next to the name, under **Options**, opens a searchable grid. Search by what you are
 doing (`code`, `game`, `focus`, `music`, `terminal`) or browse. **No icon** is
 always there.
 
@@ -570,6 +579,9 @@ lose what you already have, or **Replace existing**.
 ---
 
 ## Settings
+
+Bottom right of the panel, next to **Activity**. Import and export live here
+too, since they are about the whole file rather than about one mode.
 
 | Setting | Default | What it does |
 |---|---|---|

@@ -3,8 +3,13 @@ import qs.Commons
 import qs.Ui
 import "Model.js" as Model
 
-// The edit form for one mode. Text fields commit on editingFinished so the
-// draft does not change (and re-drive the `text` binding) while you are typing.
+// Everything about a mode that is not its workspaces: what it is called, what
+// it does to the environment, and the commands and triggers behind Advanced.
+// The workspaces themselves are WorkspaceCanvas, which is the editor's main
+// view rather than a section of this form.
+//
+// Text fields commit on editingFinished so the draft does not change (and
+// re-drive the `text` binding) while you are typing.
 Column {
   id: form
 
@@ -75,27 +80,6 @@ Column {
     font.family: form.fontFamily
     font.pixelSize: Style.font.caption
     elide: Text.ElideRight
-  }
-
-  Toggle {
-    width: form.width
-    label: "Enabled"
-    description: "A disabled mode is hidden from the switcher and never triggers"
-    foreground: form.foreground
-    fontFamily: form.fontFamily
-    checked: form.draft ? form.draft.enabled !== false : true
-    onClicked: form.editor.setDraft("enabled", !checked)
-  }
-
-  PanelSeparator { width: form.width; foreground: form.foreground }
-
-  // ----------------------------------------------------------- workspaces
-
-  PanelSectionHeader { width: form.width; text: "Workspaces"; foreground: form.foreground; fontFamily: form.fontFamily }
-
-  WorkspaceCanvas {
-    width: form.width
-    editor: form.editor
   }
 
   PanelSeparator { width: form.width; foreground: form.foreground }

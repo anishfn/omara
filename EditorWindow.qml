@@ -18,7 +18,7 @@ Item {
   property string selectedId: ""
   property var draft: null
   property bool dirty: false
-  property string pane: "edit"   // edit | create | settings | log
+  property string pane: "edit"   // edit | options | settings | log | import
 
   // A layer-shell overlay sits above every toplevel and holds keyboard focus,
   // so an external file chooser opens behind it. Stand down while one is up.
@@ -68,20 +68,22 @@ Item {
 
   // ------------------------------------------------------------- lifecycle
 
+  // "new" lands on a new mode, not on a screen asking which kind of new mode
+  // it should be. There is only one kind.
   function openFor(modeId) {
     var id = String(modeId || "")
+    root.opened = true
     if (id === "new") {
-      root.pane = "create"
-      root.selectedId = ""
-      root.draft = null
+      createFromTemplate("blank")
     } else if (id !== "") {
       selectMode(id)
     } else if (modes.length > 0) {
       selectMode(modes[0].id)
     } else {
-      root.pane = "create"
+      root.pane = "edit"
+      root.draft = null
+      root.selectedId = ""
     }
-    root.opened = true
     Qt.callLater(function() { if (root.opened) keyCatcher.forceActiveFocus() })
   }
 
@@ -138,11 +140,7 @@ Item {
   function requestPane(next) { guard(function() { root.pane = next }) }
 
   function requestCreateMode() {
-    guard(function() {
-      root.pane = "create"
-      root.draft = null
-      root.selectedId = ""
-    })
+    guard(function() { root.createFromTemplate("blank") })
   }
 
   function selectMode(id) {
@@ -473,6 +471,32 @@ Item {
     if (selectedId) selectMode(selectedId)
   }
 
+  // Trying a mode means being in it. The editor is a layer-shell overlay that
+  // covers every toplevel, so anything this launches would open behind it.
+  function testDraft() {
+    if (!service || !draft) return
+    var id = draft.id
+    if (root.dirty) saveDraft()
+    root.close()
+    service.activateMode(id)
+  }
+
+  // What this mode adds up to, in the one line the footer has for it.
+  readonly property string draftSummary: {
+    if (!draft) return ""
+    var apps = draft.applications.length
+    if (apps === 0) return "nothing set up yet"
+    var used = 0
+    var list = root.layouts
+    for (var i = 0; i < list.length; i++)
+      if (Model.paneApps(list[i].tree, []).length > 0) used++
+    var out = apps + (apps === 1 ? " app on " : " apps on ") + used
+      + (used === 1 ? " workspace" : " workspaces")
+    if (draft.workspaces.target !== null && draft.workspaces.target !== undefined)
+      out += ", lands on " + draft.workspaces.target
+    return out
+  }
+
   function createFromTemplate(key) {
     if (!service || root.creating) return
     root.creating = true
@@ -506,7 +530,7 @@ Item {
     root.draft = null
     root.selectedId = ""
     if (next) selectMode(next)
-    else root.pane = "create"
+    else root.pane = "edit"
   }
 
   // Replaces the whole draft; mutating a nested field would not re-evaluate
@@ -674,7 +698,7 @@ Item {
     service.importFromText(root.importText, how)
     root.importIncoming = []
     root.importText = ""
-    root.pane = modes.length > 0 ? "edit" : "create"
+    root.pane = "edit"
     if (modes.length > 0) selectMode(modes[modes.length - 1].id)
   }
 
@@ -735,7 +759,7 @@ Item {
       // Only reached while nothing inside has focus, which makes it the entry
       // point into the form rather than a step in the middle of it.
       Keys.onTabPressed: function(event) {
-        if (modeForm.visible) {
+        if (root.pane === "options" && modeForm.visible) {
           modeForm.focusFirstField()
           event.accepted = true
         }
@@ -757,7 +781,7 @@ Item {
         } else if (event.key === Qt.Key_N) {
           root.requestCreateMode()
           event.accepted = true
-        } else if (event.key === Qt.Key_D && root.pane === "edit" && root.draft) {
+        } else if (event.key === Qt.Key_D && root.draft) {
           root.duplicateSelected()
           event.accepted = true
         }
@@ -766,17 +790,16 @@ Item {
       Rectangle {
         id: card
         anchors.centerIn: parent
-        // Wide enough for the workspace canvas to sit beside the mode list
-        // without either being a sliver, and it shrinks to the screen first.
+        // One size, not one per pane. The canvas is the content now, and a
+        // card that resized itself around whichever sheet was open made every
+        // trip through Options a jump cut.
         width: Math.min(parent.width - Style.space(64), Style.space(1020))
-        // Sized to what is in it, within reason, so the first-run screen is not
-        // a small list floating in a large empty box.
-        readonly property real contentHeight: Style.space(150)
-          + Math.max(detailColumn.implicitHeight, sidebarColumn.implicitHeight + Style.space(150))
-        height: Math.min(parent.height - Style.space(64),
-          Math.max(Style.space(320), Math.min(Style.space(760), contentHeight)))
+        height: Math.min(parent.height - Style.space(64), Style.space(660))
         radius: Style.cornerRadius
-        color: root.background
+        // The popup surface colour carries alpha. That reads well on a menu
+        // with six rows in it; on a board of panes the desktop behind shows
+        // through every one of them and you cannot tell a pane from a window.
+        color: Qt.rgba(root.background.r, root.background.g, root.background.b, 1)
         border.width: Math.max(1, Style.normalBorderWidth)
         border.color: Color.popups.border
 
@@ -785,48 +808,113 @@ Item {
         ColumnLayout {
           anchors.fill: parent
           anchors.margins: Style.spacing.panelPadding
-          spacing: Style.spacing.panelGap
+          spacing: Style.space(10)
 
           // ------------------------------------------------------ header
+          //
+          // The modes are chips rather than a column down the side: a mode is
+          // a thing you switch between, not a document you browse, and the
+          // room the old sidebar took is room the canvas needed.
           RowLayout {
             Layout.fillWidth: true
-            spacing: Style.space(10)
+            spacing: Style.space(4)
 
-            Text {
-              text: "Omara"
-              color: root.foreground
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.heading
-              font.bold: true
-            }
-
-            Text {
+            Flickable {
+              // Sized to the chips, so New and Capture sit next to the last
+              // mode rather than across the card from it. It only becomes a
+              // scroller once there are more modes than the row can hold.
               Layout.fillWidth: true
-              textFormat: Text.PlainText
-              text: root.service && root.service.activeMode
-                ? "Active: " + root.service.activeMode.name : "No mode active"
-              color: root.dim
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.caption
-              elide: Text.ElideRight
+              Layout.maximumWidth: chips.implicitWidth
+              Layout.preferredHeight: chips.implicitHeight
+              contentWidth: chips.implicitWidth
+              contentHeight: height
+              clip: true
+              flickableDirection: Flickable.HorizontalFlick
+              boundsBehavior: Flickable.StopAtBounds
+
+              Row {
+                id: chips
+                spacing: Style.space(4)
+
+                Repeater {
+                  model: root.modes
+
+                  Button {
+                    required property var modelData
+
+                    text: modelData.name
+                    iconText: modelData.icon ? String(modelData.icon) : ""
+                    bordered: true
+                    focusable: true
+                    selected: root.selectedId === modelData.id
+                    active: root.service && root.service.activeModeId === modelData.id
+                    foreground: modelData.enabled === false ? root.dim : root.foreground
+                    fontFamily: root.fontFamily
+                    fontSize: Style.font.bodySmall
+                    tooltipText: modelData.description || ""
+                    Accessible.name: "Edit the mode " + modelData.name
+                    onClicked: root.requestSelect(modelData.id)
+                  }
+                }
+              }
             }
 
             Button {
-              text: "Activity"
+              iconText: Model.Glyph.add
+              tooltipText: "New mode  ·  Ctrl+N"
+              focusable: true
               foreground: root.foreground
               fontFamily: root.fontFamily
-              selected: root.pane === "log"
-              focusable: true
-              onClicked: root.requestPane(root.pane === "log" ? "edit" : "log")
+              Accessible.name: "New mode"
+              bordered: true
+              onClicked: root.requestCreateMode()
             }
 
             Button {
-              text: "Settings"
+              iconText: Model.Glyph.capture
+              tooltipText: "Make a mode out of the desktop as it is now"
+              focusable: true
               foreground: root.foreground
               fontFamily: root.fontFamily
-              selected: root.pane === "settings"
+              Accessible.name: "Capture the desktop"
+              bordered: true
+              onClicked: root.captureDesktop()
+            }
+
+            Item { Layout.fillWidth: true; Layout.preferredHeight: 1 }
+
+            Button {
+              text: "Options"
+              visible: root.draft !== null
+              selected: root.pane === "options"
               focusable: true
-              onClicked: root.requestPane(root.pane === "settings" ? "edit" : "settings")
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              tooltipText: "Name, environment, commands, triggers"
+              onClicked: root.pane = root.pane === "options" ? "edit" : "options"
+            }
+
+            Button {
+              text: "Test"
+              visible: root.draft !== null
+              focusable: true
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              tooltipText: "Save, close, and switch to this mode now"
+              Accessible.name: "Try this mode now"
+              onClicked: root.testDraft()
+            }
+
+            Button {
+              text: "Save"
+              visible: root.draft !== null
+              bordered: true
+              focusable: true
+              tooltipText: "Ctrl+S"
+              enabled: root.dirty
+              foreground: root.dirty ? root.foreground : root.dim
+              fontFamily: root.fontFamily
+              onClicked: root.saveDraft()
             }
 
             PanelActionButton {
@@ -839,180 +927,116 @@ Item {
             }
           }
 
-          PanelSeparator { Layout.fillWidth: true; foreground: root.foreground }
-
           // ------------------------------------------------------- body
-          RowLayout {
+          Item {
             Layout.fillWidth: true
             Layout.fillHeight: true
-            spacing: Style.spacing.panelGap
 
-            // ------------------------------------------------ sidebar
-            ColumnLayout {
-              Layout.fillWidth: false
-              Layout.minimumWidth: Style.space(170)
-              Layout.preferredWidth: Style.space(210)
-              Layout.maximumWidth: Style.space(210)
-              Layout.fillHeight: true
-              spacing: Style.space(6)
+            // ------------------------------------------------- canvas
+            WorkspaceCanvas {
+              id: canvas
+              anchors.fill: parent
+              visible: root.pane === "edit" && root.draft !== null
+              editor: root
+            }
 
-              Flickable {
-                id: sidebarFlick
-                Layout.fillWidth: true
-                Layout.fillHeight: true
-                clip: true
-                contentWidth: width
-                contentHeight: sidebarColumn.implicitHeight
-                boundsBehavior: Flickable.StopAtBounds
+            // -------------------------------------------- empty state
+            Column {
+              anchors.centerIn: parent
+              width: Math.min(parent.width, Style.space(360))
+              spacing: Style.space(10)
+              visible: root.pane === "edit" && root.draft === null
 
-                Column {
-                  id: sidebarColumn
-                  width: sidebarFlick.width
-                  spacing: Style.space(2)
-
-                  Repeater {
-                    model: root.modes
-
-                    ModeRow {
-                      required property var modelData
-                      width: sidebarColumn.width
-                      mode: modelData
-                      isActive: root.service && root.service.activeModeId === modelData.id
-                      hasCursor: root.selectedId === modelData.id
-                      foreground: root.foreground
-                      fontFamily: root.fontFamily
-                      reorderable: true
-                      onClicked: root.requestSelect(modelData.id)
-                      onEditRequested: root.requestSelect(modelData.id)
-                      onMoveRequested: function(delta) {
-                        root.selectedId = modelData.id
-                        root.moveSelected(delta)
-                      }
-                    }
-                  }
-
-                  Text {
-                    width: parent.width
-                    visible: root.modes.length === 0
-                    wrapMode: Text.Wrap
-                    text: "No modes yet."
-                    color: root.dim
-                    font.family: root.fontFamily
-                    font.pixelSize: Style.font.bodySmall
-                  }
-                }
+              Text {
+                width: parent.width
+                horizontalAlignment: Text.AlignHCenter
+                wrapMode: Text.Wrap
+                text: "Nothing here yet.\nA mode is a way your desktop is set up."
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.bodySmall
               }
 
-              PanelSeparator { Layout.fillWidth: true; foreground: root.foreground }
-
-              Button {
-                Layout.fillWidth: true
-                iconText: Model.Glyph.add
-                text: "New mode"
-                leftAlign: true
-                foreground: root.foreground
-                fontFamily: root.fontFamily
-                focusable: true
-                onClicked: root.requestCreateMode()
-              }
-
-              Button {
-                Layout.fillWidth: true
-                iconText: Model.Glyph.capture
-                text: "Capture desktop"
-                focusable: true
-                leftAlign: true
-                foreground: root.foreground
-                fontFamily: root.fontFamily
-                Accessible.name: "Make a mode from the desktop as it is now"
-                onClicked: root.captureDesktop()
-              }
-
-              RowLayout {
-                Layout.fillWidth: true
+              Row {
+                anchors.horizontalCenter: parent.horizontalCenter
                 spacing: Style.space(6)
 
                 Button {
-                  Layout.fillWidth: true
-                  iconText: Model.Glyph.importFile
-                  text: "Import"
+                  iconText: Model.Glyph.capture
+                  text: "Capture the desktop"
+                  bordered: true
                   focusable: true
                   foreground: root.foreground
                   fontFamily: root.fontFamily
-                  onClicked: root.browseImport()
+                  onClicked: root.captureDesktop()
                 }
 
                 Button {
-                  Layout.fillWidth: true
-                  iconText: Model.Glyph.exportFile
-                  text: "Export"
+                  iconText: Model.Glyph.add
+                  text: "Start empty"
+                  bordered: true
                   focusable: true
-                  enabled: root.modes.length > 0
-                  foreground: root.modes.length > 0 ? root.foreground : root.dim
+                  foreground: root.foreground
                   fontFamily: root.fontFamily
-                  onClicked: root.exportAll()
+                  onClicked: root.requestCreateMode()
                 }
               }
             }
 
-            Rectangle {
-              Layout.preferredWidth: 1
-              Layout.fillHeight: true
-              color: Util.alpha(root.foreground, 0.12)
-            }
-
-            // --------------------------------------------------- detail
+            // ------------------------------------------------- sheets
+            //
+            // Everything that is not the canvas lives behind one of these, on
+            // the same card rather than in a window of its own, so nothing can
+            // stack above the overlay and nothing has to be dismissed twice.
             Flickable {
-              id: detailFlick
-              Layout.fillWidth: true
-              Layout.fillHeight: true
+              id: sheetFlick
+              anchors.fill: parent
+              visible: root.pane !== "edit"
               clip: true
               contentWidth: width
-              contentHeight: detailColumn.implicitHeight
+              contentHeight: sheet.implicitHeight
               boundsBehavior: Flickable.StopAtBounds
 
               Column {
-                id: detailColumn
-                width: detailFlick.width
+                id: sheet
+                width: sheetFlick.width
                 spacing: Style.space(12)
 
-                // ------------------------------------------- templates
+                // ------------------------------------------- options
                 Column {
                   width: parent.width
-                  spacing: Style.space(8)
-                  visible: root.pane === "create"
+                  spacing: Style.space(12)
+                  visible: root.pane === "options" && root.draft !== null
 
-                  PanelSectionHeader { width: parent.width; text: "New mode"; foreground: root.foreground; fontFamily: root.fontFamily }
-
-                  Text {
+                  ModeForm {
+                    id: modeForm
                     width: parent.width
-                    wrapMode: Text.Wrap
-                    text: "Capture what is open right now, or start empty. Everything is editable afterwards."
-                    color: root.dim
-                    font.family: root.fontFamily
-                    font.pixelSize: Style.font.bodySmall
+                    editor: root
                   }
 
-                  Button {
-                    width: detailColumn.width
-                    leftAlign: true
-                    bordered: true
-                    iconText: Model.Glyph.capture
-                    text: "Current desktop:  everything open right now"
-                    foreground: root.foreground
-                    fontFamily: root.fontFamily
-                    onClicked: root.captureDesktop()
-                  }
+                  PanelSeparator { width: parent.width; foreground: root.foreground }
 
-                  Button {
-                    width: detailColumn.width
-                    leftAlign: true
-                    bordered: true
-                    iconText: Model.Glyph.blank
-                    text: "Blank:  an empty mode to fill in yourself"
-                    foreground: root.foreground
-                    fontFamily: root.fontFamily
-                    onClicked: root.createFromTemplate("blank")
+                  Row {
+                    spacing: Style.space(6)
+
+                    Button {
+                      iconText: Model.Glyph.duplicate
+                      text: "Duplicate"
+                      foreground: root.foreground
+                      fontFamily: root.fontFamily
+                      focusable: true
+                      tooltipText: "Ctrl+D"
+                      onClicked: root.duplicateSelected()
+                    }
+
+                    Button {
+                      iconText: Model.Glyph.remove
+                      text: "Delete"
+                      foreground: Color.urgent
+                      fontFamily: root.fontFamily
+                      focusable: true
+                      onClicked: deleteConfirm.opened = true
+                    }
                   }
                 }
 
@@ -1061,7 +1085,7 @@ Item {
 
                     Column {
                       required property var modelData
-                      width: detailColumn.width
+                      width: sheet.width
                       spacing: Style.space(2)
 
                       Text {
@@ -1081,7 +1105,7 @@ Item {
 
                         Text {
                           required property string modelData
-                          width: detailColumn.width - Style.space(16)
+                          width: sheet.width - Style.space(16)
                           x: Style.space(16)
                           wrapMode: Text.Wrap
                           textFormat: Text.PlainText
@@ -1172,7 +1196,7 @@ Item {
                       // "Activating" line and the rule goes below it.
                       readonly property bool runStart: String(modelData.message).indexOf("Activating ") === 0
 
-                      width: detailColumn.width
+                      width: sheet.width
                       spacing: Style.space(3)
 
                       Text {
@@ -1225,13 +1249,38 @@ Item {
 
                     Toggle {
                       required property var modelData
-                      width: detailColumn.width
+                      width: sheet.width
                       label: modelData.label
                       description: modelData.description
                       foreground: root.foreground
                       fontFamily: root.fontFamily
                       checked: root.service ? root.service.config.behavior[modelData.key] === true : false
                       onClicked: if (root.service) root.service.setBehavior(modelData.key, !checked)
+                    }
+                  }
+
+                  PanelSeparator { width: parent.width; foreground: root.foreground }
+
+                  Row {
+                    spacing: Style.space(6)
+
+                    Button {
+                      iconText: Model.Glyph.importFile
+                      text: "Import"
+                      focusable: true
+                      foreground: root.foreground
+                      fontFamily: root.fontFamily
+                      onClicked: root.browseImport()
+                    }
+
+                    Button {
+                      iconText: Model.Glyph.exportFile
+                      text: "Export"
+                      focusable: true
+                      enabled: root.modes.length > 0
+                      foreground: root.modes.length > 0 ? root.foreground : root.dim
+                      fontFamily: root.fontFamily
+                      onClicked: root.exportAll()
                     }
                   }
 
@@ -1245,24 +1294,6 @@ Item {
                     font.pixelSize: Style.font.caption
                   }
                 }
-
-                // ------------------------------------------------ form
-                ModeForm {
-                  id: modeForm
-                  width: detailColumn.width
-                  visible: root.pane === "edit" && root.draft !== null
-                  editor: root
-                }
-
-                Text {
-                  width: parent.width
-                  visible: root.pane === "edit" && root.draft === null
-                  wrapMode: Text.Wrap
-                  text: "Pick a mode on the left, or create one."
-                  color: root.dim
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.bodySmall
-                }
               }
             }
           }
@@ -1270,56 +1301,62 @@ Item {
           // ------------------------------------------------------ footer
           RowLayout {
             Layout.fillWidth: true
-            visible: root.pane === "edit" && root.draft !== null
-            spacing: Style.space(6)
+            spacing: Style.space(8)
 
-            Button {
-              iconText: Model.Glyph.remove
-              text: "Delete"
-              foreground: Color.urgent
-              fontFamily: root.fontFamily
-              focusable: true
-              onClicked: deleteConfirm.opened = true
-            }
-
-            Button {
-              iconText: Model.Glyph.duplicate
-              text: "Duplicate"
+            ToggleSwitch {
+              visible: root.draft !== null
+              checked: root.draft ? root.draft.enabled !== false : true
               foreground: root.foreground
-              fontFamily: root.fontFamily
-              focusable: true
-              tooltipText: "Ctrl+D"
-              onClicked: root.duplicateSelected()
+              Accessible.name: "Show this mode in the switcher"
+              onToggled: root.setDraft("enabled", !checked)
             }
-
-            Item { Layout.fillWidth: true }
 
             Text {
-              visible: root.dirty
-              text: "Unsaved changes"
+              visible: root.draft !== null
+              text: "Show this mode in the switcher"
               color: root.dim
               font.family: root.fontFamily
               font.pixelSize: Style.font.caption
             }
 
-            Button {
-              text: "Revert"
-              focusable: true
-              enabled: root.dirty
-              foreground: root.dirty ? root.foreground : root.dim
-              fontFamily: root.fontFamily
-              onClicked: root.revertDraft()
+            Item { Layout.fillWidth: true; Layout.preferredHeight: 1 }
+
+            Text {
+              visible: root.dirty
+              text: "Unsaved"
+              color: Color.accent
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+            }
+
+            Text {
+              visible: root.draft !== null
+              textFormat: Text.PlainText
+              text: root.draftSummary
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              elide: Text.ElideRight
             }
 
             Button {
-              text: "Save"
-              bordered: true
+              text: "Activity"
               focusable: true
-              tooltipText: "Ctrl+S"
-              enabled: root.dirty
-              foreground: root.dirty ? root.foreground : root.dim
+              fontSize: Style.font.caption
+              selected: root.pane === "log"
+              foreground: root.dim
               fontFamily: root.fontFamily
-              onClicked: root.saveDraft()
+              onClicked: root.requestPane(root.pane === "log" ? "edit" : "log")
+            }
+
+            Button {
+              text: "Settings"
+              focusable: true
+              fontSize: Style.font.caption
+              selected: root.pane === "settings"
+              foreground: root.dim
+              fontFamily: root.fontFamily
+              onClicked: root.requestPane(root.pane === "settings" ? "edit" : "settings")
             }
           }
         }
