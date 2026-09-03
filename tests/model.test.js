@@ -1231,6 +1231,36 @@ test("panes are capped in count and in depth", () => {
   assert.equal(Model.paneAt(deep, "1".repeat(Model.MAX_SPLIT_DEPTH + 1)), null)
 })
 
+test("a mode with nothing in it starts on workspace 1, not on \"anywhere\"", () => {
+  const ctx = Model.normalizeMode({ id: "new", name: "New" }, [])
+  assert.deepEqual(ctx.workspaces.layouts, [{ workspace: "1", tree: { app: "" } }])
+  // The same for a mode saved before there was a rule, whose one tab is an
+  // empty "anywhere" nobody chose.
+  const legacy = Model.normalizeMode({
+    id: "old", name: "Old",
+    workspaces: { layouts: [{ workspace: "", tree: { app: "" } }] }
+  }, [])
+  assert.deepEqual(legacy.workspaces.layouts.map(l => l.workspace), ["1"])
+
+  // "Anywhere" is still reachable — it is what an application with no
+  // workspace of its own lands in — it is just not where a mode begins.
+  const loose = Model.normalizeMode({ id: "x", name: "X", applications: [{ command: "htop" }] }, [])
+  assert.deepEqual(loose.workspaces.layouts.map(l => l.workspace), [""])
+  assert.equal(loose.applications[0].workspace, null)
+
+  // And a mode that has applications keeps every tab exactly as it found it,
+  // including an empty one somebody added on purpose.
+  const kept = Model.normalizeMode({
+    id: "k", name: "K",
+    applications: [{ uid: "a", desktopId: "one" }],
+    workspaces: { layouts: [
+      { workspace: "2", tree: { app: "a" } },
+      { workspace: "", tree: { app: "" } }
+    ] }
+  }, [])
+  assert.deepEqual(kept.workspaces.layouts.map(l => l.workspace), ["2", ""])
+})
+
 test("a mode without a stored layout gets one from the workspaces it names", () => {
   const ctx = Model.normalizeMode({
     id: "coding", name: "Coding",
