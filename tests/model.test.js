@@ -707,7 +707,11 @@ test("no example modes ship: blank is the only template", () => {
 
 test("the bar mark is drawn in the theme's colour, not loaded as an image", () => {
   const mark = read("OmaraMark.qml")
-  assert.match(mark, /import QtQuick\.Shapes/)
+  // Drawn, whatever it is drawn out of — Rectangles today, a Shape before
+  // that. What matters is that no pixels are loaded and the colour comes from
+  // the theme, not which primitive happens to be enough for the shape.
+  assert.doesNotMatch(mark, /\bImage\s*\{/, "the mark must not load an image")
+  assert.doesNotMatch(mark, /\.(png|svg|jpg)/i, "the mark must not name an image file")
   assert.match(mark, /property color color: Color\.foreground/)
   const bar = read("BarWidget.qml")
   assert.match(bar, /OmaraMark \{/)
