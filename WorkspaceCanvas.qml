@@ -269,7 +269,14 @@ Item {
           readonly property bool editing: canvas.renaming === index
           readonly property bool isLanding: canvas.landing !== "" && canvas.landing === modelData.workspace
 
-          opacity: canvas.reordering === index ? 0.65 : 1
+          // What is in this workspace, on the tab. Dragging moves the contents
+          // and leaves the numbers where they are, so without this the strip
+          // reads 1 2 3 before and 1 2 3 after and the drag looks like it did
+          // nothing at all — which is exactly how it was reported.
+          readonly property int filled: Model.paneApps(modelData.tree, []).length
+
+          opacity: canvas.reordering === index ? 0.8 : 1
+          z: canvas.reordering === index ? 1 : 0
 
           // Wide enough to read, narrow enough that one workspace does not
           // look like a title bar. They share the leftover room between them
@@ -286,9 +293,13 @@ Item {
             bordered: true
             focusable: true
             selected: canvas.tab === index
+            // Borrow the accent border the selected pane uses, so the tab you
+            // have hold of is obvious while the strip rearranges around it.
+            bordered: true
+            accent: Color.accent
+            hasCursor: canvas.reordering === index || tabMouse.containsMouse
             foreground: canvas.foreground
             fontFamily: canvas.fontFamily
-            hasCursor: tabMouse.containsMouse
             tooltipText: modelData.workspace === ""
               ? "Opens wherever you happen to be  ·  drag to reorder"
               : "Click again to rename  ·  drag to reorder"
@@ -304,6 +315,18 @@ Item {
               anchors.top: parent.top
               anchors.right: parent.right
               anchors.margins: Style.space(3)
+            }
+
+            Text {
+              visible: cell.filled > 0
+              text: cell.filled
+              color: canvas.dim
+              font.family: canvas.fontFamily
+              font.pixelSize: Style.font.caption
+              anchors.bottom: parent.bottom
+              anchors.right: parent.right
+              anchors.bottomMargin: Style.space(2)
+              anchors.rightMargin: Style.space(5)
             }
           }
 

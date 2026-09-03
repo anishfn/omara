@@ -361,6 +361,7 @@ Each tab is one workspace. A pane is one application.
 | Resize | Drag the divider between two panes |
 | Remove one | The × on the pane |
 | Reorder workspaces | Drag a tab left or right; the contents move, the numbers stay in place |
+| See what is in one | The count on a tab is how many applications that workspace opens |
 
 Click the tab you are already on to rename it, and drag a tab to move it.
 
