@@ -43,6 +43,29 @@ Item {
   readonly property var tree: (tab >= 0 && tab < layouts.length) ? layouts[tab].tree : Model.paneLeaf("")
   readonly property var rects: Model.paneRects(tree, board.width, board.height, canvas.gap)
 
+  // The Repeaters below count these rather than iterate them. A resize
+  // rewrites the tree on every mouse move, which makes paneRects hand back a
+  // fresh array each time; a Repeater told to model that array throws away its
+  // delegates and builds new ones, and the divider you were dragging is
+  // destroyed mid-drag along with the grab it was holding. Counting keeps the
+  // delegates alive across a resize and only rebuilds when a pane is added or
+  // removed, which is the only time the count actually changes.
+  readonly property var voidRect: ({
+    path: "", app: "", direction: "row",
+    x: 0, y: 0, width: 0, height: 0,
+    spanX: 0, spanY: 0, spanWidth: 0, spanHeight: 0
+  })
+
+  function paneRect(i) {
+    var list = canvas.rects.panes
+    return (i >= 0 && i < list.length) ? list[i] : canvas.voidRect
+  }
+
+  function dividerRect(i) {
+    var list = canvas.rects.dividers
+    return (i >= 0 && i < list.length) ? list[i] : canvas.voidRect
+  }
+
   readonly property string landing: draft && draft.workspaces && draft.workspaces.target !== null
     && draft.workspaces.target !== undefined ? String(draft.workspaces.target) : ""
 
@@ -56,7 +79,16 @@ Item {
 
   // A different mode is a different set of workspaces; nothing about the last
   // one should still be selected, being renamed, or half dragged.
-  onDraftChanged: {
+  //
+  // Keyed on the mode's id, not on the draft object. The draft is replaced on
+  // every edit — a resize replaces it on every mouse move — so watching the
+  // object itself meant each of those counted as switching modes: the pane you
+  // had selected was deselected, and a drag in progress was cancelled under
+  // you the moment it changed anything.
+  readonly property string modeId: draft ? String(draft.id) : ""
+
+  onModeIdChanged: {
+    canvas.tab = 0
     canvas.renaming = -1
     canvas.selectedPath = ""
     canvas.dragCancel()
@@ -484,11 +516,12 @@ Item {
 
           // ------------------------------------------------------- panes
           Repeater {
-            model: canvas.rects.panes
+            model: canvas.rects.panes.length
 
             Rectangle {
-              required property var modelData
+              required property int index
 
+              readonly property var modelData: canvas.paneRect(index)
               readonly property var app: canvas.editor.applicationByUid(modelData.app)
               readonly property bool chosen: canvas.selectedPath === modelData.path
               readonly property bool targeted: canvas.dragging && canvas.overPane
@@ -680,12 +713,14 @@ Item {
 
           // ---------------------------------------------------- dividers
           Repeater {
-            model: canvas.rects.dividers
+            model: canvas.rects.dividers.length
 
             Item {
-              required property var modelData
+              required property int index
 
-              // The grab area is wider than the line, so a 4px divider is
+              readonly property var modelData: canvas.dividerRect(index)
+
+              // The grab area is wider than the line, so a thin divider is
               // still something a pointer can catch.
               readonly property int reach: Style.space(4)
 
@@ -730,10 +765,12 @@ Item {
 
           // ------------------------------------------------ pane controls
           Repeater {
-            model: canvas.rects.panes
+            model: canvas.rects.panes.length
 
             Row {
-              required property var modelData
+              required property int index
+
+              readonly property var modelData: canvas.paneRect(index)
 
               // Only on a pane with something in it: an empty pane has nothing
               // to split, nothing to skip, and closing it is what dropping an
@@ -765,19 +802,6 @@ Item {
                 foreground: canvas.foreground
                 fontFamily: canvas.fontFamily
                 onClicked: canvas.editor.splitPane(canvas.tab, modelData.path, "column")
-              }
-
-              PanelActionButton {
-                iconText: Model.Glyph.power
-                tooltipText: "Open this one with the mode, or skip it"
-                size: Style.space(20)
-                fontSize: Style.font.caption
-                foreground: canvas.foreground
-                fontFamily: canvas.fontFamily
-                onClicked: {
-                  var app = canvas.editor.applicationByUid(modelData.app)
-                  if (app) canvas.editor.setApplicationField(modelData.app, "enabled", app.enabled === false)
-                }
               }
 
               PanelActionButton {

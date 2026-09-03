@@ -309,9 +309,13 @@ ghostty -e btop
 omarchy-launch-terminal
 ```
 
-A custom command is edited in the pane it will run in. Both kinds of
-application get a power button on the pane, which is handy for keeping an app
-in a mode without launching it every time.
+A custom command is edited in the pane it will run in: pick the pane and the
+name becomes the field.
+
+An application can also be switched off without being removed — `"enabled":
+false` in the config file. Its pane stays on the canvas, greyed, and the mode
+leaves it alone. There is no button for it in the editor; a pane you do not
+want is a pane you close.
 
 ### Icons
 
