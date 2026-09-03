@@ -188,7 +188,15 @@ Item {
     })
   }
 
-  function openAppPicker() {
+  // Which pane a picked application should land in. Set before the picker
+  // opens and read when it answers, so an application chosen from a pane goes
+  // into that pane instead of onto the end of a list.
+  property int pendingLayout: -1
+  property string pendingPath: ""
+
+  function openAppPicker(layoutIndex, path) {
+    root.pendingLayout = layoutIndex === undefined ? -1 : layoutIndex
+    root.pendingPath = path === undefined ? "" : String(path)
     root.appPickerOpen = true
     appPicker.reset()
   }
@@ -196,12 +204,248 @@ Item {
   function addDesktopApplication(desktopId) {
     root.appPickerOpen = false
     if (!desktopId) return
-    pushDraftList("applications", { desktopId: String(desktopId), command: "", enabled: true })
+    root.placeApplication(root.pendingLayout, root.pendingPath, "center",
+      { desktopId: String(desktopId), command: "", enabled: true })
   }
 
   function addCustomApplication() {
     root.appPickerOpen = false
-    pushDraftList("applications", { desktopId: "", command: "", enabled: true })
+    // A blank command is not an application yet, so it cannot go through
+    // normalizeApplication. It gets a pane and a uid, and the field to fill in.
+    root.placeApplication(root.pendingLayout, root.pendingPath, "center",
+      { desktopId: "", command: "", enabled: true })
+  }
+
+  // ------------------------------------------------------------ pane layout
+  //
+  // Every edit here rebuilds the whole draft through Model.reconcileMode, so
+  // the panes, the application list, and each application's workspace are
+  // never read while one of them is half-updated.
+
+  readonly property var layouts: draft && draft.workspaces && Array.isArray(draft.workspaces.layouts)
+    ? draft.workspaces.layouts : []
+
+  function commitDraft(next) {
+    root.draft = Model.reconcileMode(next)
+    edited()
+  }
+
+  function layoutTree(index) {
+    var list = root.layouts
+    return (index >= 0 && index < list.length) ? list[index].tree : Model.paneLeaf("")
+  }
+
+  function setLayoutTree(index, tree) {
+    if (!draft || index < 0 || index >= root.layouts.length) return
+    var next = Model.clone(draft)
+    next.workspaces.layouts[index].tree = tree
+    commitDraft(next)
+  }
+
+  function applicationByUid(uid) {
+    var key = String(uid || "")
+    if (key === "" || !draft) return null
+    var apps = draft.applications
+    for (var i = 0; i < apps.length; i++) if (apps[i].uid === key) return apps[i]
+    return null
+  }
+
+  function applicationIndexByUid(uid) {
+    var key = String(uid || "")
+    if (key === "" || !draft) return -1
+    for (var i = 0; i < draft.applications.length; i++)
+      if (draft.applications[i].uid === key) return i
+    return -1
+  }
+
+  function setApplicationField(uid, field, value) {
+    var index = applicationIndexByUid(uid)
+    if (index === -1) return
+    var next = Model.clone(draft)
+    next.applications[index][field] = value
+    commitDraft(next)
+  }
+
+  // A workspace only exists here as a tab; it is created empty and named
+  // afterwards, the same way you would open one on the desktop.
+  function addWorkspace() {
+    if (!draft || root.layouts.length >= Model.MAX_LAYOUTS) return -1
+    var taken = {}
+    for (var i = 0; i < root.layouts.length; i++) taken["w:" + root.layouts[i].workspace] = true
+    var n = 1
+    while (taken["w:" + n] && n < 100) n++
+    var next = Model.clone(draft)
+    next.workspaces.layouts.push({ workspace: String(n), tree: Model.paneLeaf("") })
+    commitDraft(next)
+    return next.workspaces.layouts.length - 1
+  }
+
+  // The applications in a removed workspace go with it. Leaving them behind
+  // would only put the tab back, since an application with a workspace and no
+  // pane is given one on the next reconcile.
+  function removeWorkspace(index) {
+    if (!draft || index < 0 || index >= root.layouts.length) return
+    if (root.layouts.length <= 1) return
+    var doomed = {}
+    var uids = Model.paneApps(root.layouts[index].tree, [])
+    for (var u = 0; u < uids.length; u++) doomed["u:" + uids[u]] = true
+    var next = Model.clone(draft)
+    next.workspaces.layouts.splice(index, 1)
+    var kept = []
+    for (var a = 0; a < next.applications.length; a++)
+      if (!doomed["u:" + next.applications[a].uid]) kept.push(next.applications[a])
+    next.applications = kept
+    if (next.workspaces.target !== null && String(next.workspaces.target) === String(root.layouts[index].workspace))
+      next.workspaces.target = null
+    commitDraft(next)
+  }
+
+  // Two tabs cannot name one workspace: the second would silently swallow the
+  // first on the next reconcile.
+  function renameWorkspace(index, value) {
+    if (!draft || index < 0 || index >= root.layouts.length) return false
+    var raw = String(value || "").trim()
+    var ref = raw === "" ? "" : Model.workspaceRef(raw)
+    if (raw !== "" && ref === "") return false
+    for (var i = 0; i < root.layouts.length; i++)
+      if (i !== index && root.layouts[i].workspace === ref) return false
+    if (root.layouts[index].workspace === ref) return true
+    var was = root.layouts[index].workspace
+    var next = Model.clone(draft)
+    next.workspaces.layouts[index].workspace = ref
+    if (next.workspaces.target !== null && String(next.workspaces.target) === String(was))
+      next.workspaces.target = ref === "" ? null : ref
+    commitDraft(next)
+    return true
+  }
+
+  function setLandingWorkspace(value) {
+    setDraft("workspaces.target", value)
+  }
+
+  // Drops a new application into a pane. An occupied pane splits in the
+  // direction the pointer came in from, which is the same gesture a tiling
+  // window manager answers to.
+  function placeApplication(layoutIndex, path, zone, fields) {
+    if (!draft) return
+    var index = layoutIndex >= 0 && layoutIndex < root.layouts.length ? layoutIndex : 0
+    if (root.layouts.length === 0) return
+    var app = {
+      uid: "",
+      desktopId: String(fields.desktopId || ""),
+      command: String(fields.command || ""),
+      workspace: null,
+      note: "",
+      enabled: fields.enabled !== false
+    }
+    var next = Model.clone(draft)
+    app.uid = Model.freshApplicationUid(next.applications)
+    var was = next.workspaces.layouts[index].tree
+    var tree = root.paneInsert(was, path, zone, app.uid)
+    // The pane budget is spent and there is nowhere to put this. Refusing the
+    // drop is the honest answer; adding the application anyway would leave it
+    // launching from a mode that has no pane to show it in.
+    if (tree === was) {
+      if (service) service.log("warn", "This workspace is full; close a pane first")
+      return
+    }
+    next.applications.push(app)
+    next.workspaces.layouts[index].tree = tree
+    commitDraft(next)
+  }
+
+  // Shared by a drop from the picker and a drop from another pane.
+  function paneInsert(tree, path, zone, uid) {
+    var target = Model.paneAt(tree, path)
+    if (!target || Model.isPaneSplit(target)) {
+      var empty = Model.paneFirstEmpty(tree, "")
+      return empty === null ? Model.paneAppend(tree, uid) : Model.paneSetAppAt(tree, empty, uid)
+    }
+    if (target.app === "" || zone === "center") return Model.paneSetAppAt(tree, path, uid)
+
+    var direction = (zone === "top" || zone === "bottom") ? "column" : "row"
+    var split = Model.paneSplitAt(tree, path, direction)
+    // The pane budget is spent. Take an empty pane if there is one and
+    // otherwise hand the tree back untouched, so a full workspace refuses a
+    // drop rather than throwing out what was already in that pane.
+    if (split === tree) {
+      var spare = Model.paneFirstEmpty(tree, "")
+      return spare === null ? tree : Model.paneSetAppAt(tree, spare, uid)
+    }
+    if (zone === "left" || zone === "top") {
+      split = Model.paneSetAppAt(split, path + "0", uid)
+      return Model.paneSetAppAt(split, path + "1", target.app)
+    }
+    return Model.paneSetAppAt(split, path + "1", uid)
+  }
+
+  function movePaneApp(fromIndex, fromPath, toIndex, toPath, zone) {
+    if (!draft) return
+    if (fromIndex < 0 || fromIndex >= root.layouts.length) return
+    if (toIndex < 0 || toIndex >= root.layouts.length) return
+    var source = Model.paneAt(root.layouts[fromIndex].tree, fromPath)
+    if (!source || Model.isPaneSplit(source) || source.app === "") return
+    if (fromIndex === toIndex && fromPath === toPath) return
+    var uid = source.app
+    var next = Model.clone(draft)
+
+    if (fromIndex === toIndex) {
+      var tree = next.workspaces.layouts[toIndex].tree
+      var target = Model.paneAt(tree, toPath)
+      if (target && !Model.isPaneSplit(target) && target.app !== "" && zone === "center") {
+        // Two occupied panes trade places rather than one overwriting the other.
+        tree = Model.paneSetAppAt(tree, toPath, uid)
+        tree = Model.paneSetAppAt(tree, fromPath, target.app)
+      } else {
+        // Emptying the source first keeps toPath pointing where it did.
+        var emptied = Model.paneSetAppAt(tree, fromPath, "")
+        tree = root.paneInsert(emptied, toPath, zone, uid)
+        // Nowhere to land: leave the application where it was rather than
+        // emptying its pane and dropping it on the floor.
+        if (tree === emptied) return
+      }
+      next.workspaces.layouts[toIndex].tree = tree
+    } else {
+      // Landed first, removed second: a target that could not take it leaves
+      // both workspaces exactly as they were.
+      var landed = root.paneInsert(next.workspaces.layouts[toIndex].tree, toPath, zone, uid)
+      if (landed === next.workspaces.layouts[toIndex].tree) return
+      next.workspaces.layouts[fromIndex].tree =
+        Model.paneRemoveAt(next.workspaces.layouts[fromIndex].tree, fromPath)
+      next.workspaces.layouts[toIndex].tree = landed
+    }
+    commitDraft(next)
+  }
+
+  function splitPane(index, path, direction) {
+    setLayoutTree(index, Model.paneSplitAt(root.layoutTree(index), path, direction))
+  }
+
+  // Closing a pane closes what is in it. An empty pane just goes away.
+  function closePane(index, path) {
+    if (!draft || index < 0 || index >= root.layouts.length) return
+    var node = Model.paneAt(root.layouts[index].tree, path)
+    if (!node || Model.isPaneSplit(node)) return
+    var next = Model.clone(draft)
+    if (node.app !== "") {
+      var kept = []
+      for (var a = 0; a < next.applications.length; a++)
+        if (next.applications[a].uid !== node.app) kept.push(next.applications[a])
+      next.applications = kept
+    }
+    next.workspaces.layouts[index].tree = Model.paneRemoveAt(next.workspaces.layouts[index].tree, path)
+    commitDraft(next)
+  }
+
+  function setPaneRatio(index, path, ratio) {
+    if (!draft || index < 0 || index >= root.layouts.length) return
+    // Straight onto the draft: a resize fires on every mouse move, and going
+    // through reconcile each time would rebuild the application list per pixel.
+    var next = Model.clone(draft)
+    next.workspaces.layouts[index].tree =
+      Model.paneSetRatioAt(next.workspaces.layouts[index].tree, path, ratio)
+    root.draft = next
+    edited()
   }
 
   function applicationName(app) {
@@ -522,13 +766,15 @@ Item {
       Rectangle {
         id: card
         anchors.centerIn: parent
-        width: Math.min(parent.width - Style.space(64), Style.space(860))
+        // Wide enough for the workspace canvas to sit beside the mode list
+        // without either being a sliver, and it shrinks to the screen first.
+        width: Math.min(parent.width - Style.space(64), Style.space(1020))
         // Sized to what is in it, within reason, so the first-run screen is not
         // a small list floating in a large empty box.
         readonly property real contentHeight: Style.space(150)
           + Math.max(detailColumn.implicitHeight, sidebarColumn.implicitHeight + Style.space(150))
         height: Math.min(parent.height - Style.space(64),
-          Math.max(Style.space(320), Math.min(Style.space(680), contentHeight)))
+          Math.max(Style.space(320), Math.min(Style.space(760), contentHeight)))
         radius: Style.cornerRadius
         color: root.background
         border.width: Math.max(1, Style.normalBorderWidth)

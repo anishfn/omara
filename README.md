@@ -84,8 +84,11 @@ one per action.
 ## What it is not
 
 **A session manager.** Omara does not save or restore window layouts, and it
-never will. Tools that snapshot your Hyprland windows already do that job, and
-Omara is built to sit alongside one.
+never will. The workspace canvas is a plan for what a mode *opens* — which
+workspace each application lands on and in what order — not a snapshot of
+where your windows happen to be sitting, and Omara never reads geometry back
+off the screen. Tools that snapshot your Hyprland windows already do that job,
+and Omara is built to sit alongside one.
 
 | A session manager restores | A mode changes |
 |---|---|
@@ -219,15 +222,14 @@ Those three are the only paths Omara writes.
 2. **Create a mode.** Fastest way: set your desktop up the way you like it,
    then pick **Current desktop**, which captures what is open, where, and how.
    Otherwise pick **Blank** and fill it in yourself. Nothing is preloaded.
-3. **Add applications.** *Add application* opens a searchable list of everything
-   installed. Type, arrow, Enter.
-4. **Give each app a workspace.** The small `ws` box on each row. Terminal on 1,
-   browser on 2, chat on 3.
-5. **Set where you land.** The *Workspace* field further down is the workspace
-   the mode leaves you on.
-6. **Set the mood.** Under *Environment*: Do Not Disturb, audio output,
+3. **Lay out your workspaces.** Under *Workspaces*, drag apps from the list on
+   the left onto the canvas on the right. Each tab is a workspace: terminal on
+   1, browser on 2, chat on 3. Drop an app on the edge of a pane to split it.
+4. **Set where you land.** **Land here** on whichever tab you want the mode to
+   leave you on.
+5. **Set the mood.** Under *Environment*: Do Not Disturb, audio output,
    wallpaper, and **Theme**, each picked from a list rather than typed.
-7. **Save**, then click the mode in the bar popup. If windows are already
+6. **Save**, then click the mode in the bar popup. If windows are already
    open, Omara asks whether to close them first.
 
 Your apps open across their workspaces without the screen flicking through each
@@ -247,7 +249,7 @@ asks first, so nothing is lost by accident.
 
 Renaming a mode keeps its `id`, so keybindings and scripts keep working.
 **Duplicate** copies the whole mode when you want a variant of one you
-already have. Hovering a row in either list reveals arrows to reorder it.
+already have. Hovering a mode on the left reveals arrows to reorder it.
 
 | Shortcut | |
 |---|---|
@@ -269,7 +271,7 @@ typing. It records:
 
 The editor opens on the result straight away, because a capture is a starting
 point rather than a finished mode. Two Firefox windows on two workspaces
-capture as two rows, so delete the one you did not mean. If the current wallpaper
+capture as two panes, so close the one you did not mean. If the current wallpaper
 or Do Not Disturb state is not something you want this mode forcing, set
 those fields back to *Leave unchanged*.
 
@@ -283,13 +285,14 @@ omara capture "Right now"
 
 ![Adding an application](screenshots/app-picker.png)
 
-**Add application** opens a searchable list drawn from the same desktop-entry
-index the Omarchy launcher uses, so you get the same names, icons, and
-sorting. Apps
-added this way are stored as a desktop id and launched exactly the way the
-launcher launches them.
+Applications live on the **workspace canvas**, described below. The list down
+its left side is drawn from the same desktop-entry index the Omarchy launcher
+uses, so you get the same names, icons, and sorting. Drag one onto a pane, or
+click it to drop it into the pane you have selected. Apps added this way are
+stored as a desktop id and launched exactly the way the launcher launches them.
 
-**Custom command** is the escape hatch for what a `.desktop` file cannot say:
+Double-clicking a pane opens the full picker, which also offers **Custom
+command** — the escape hatch for what a `.desktop` file cannot say:
 
 ```
 chromium --new-window https://github.com
@@ -297,9 +300,9 @@ ghostty -e btop
 omarchy-launch-terminal
 ```
 
-Both kinds sit in one list, each with its own on/off switch, which is handy for
-keeping
-an app in a mode without launching it every time.
+A custom command is edited in the pane it will run in. Both kinds of
+application get a power button on the pane, which is handy for keeping an app
+in a mode without launching it every time.
 
 ### Icons
 
@@ -315,37 +318,66 @@ box.
 
 ### Workspaces
 
-A mode can lay out as many workspaces as you need.
+A mode can lay out as many workspaces as you need, and the canvas is where you
+say so.
 
-**Per application:** the `ws` box on each row. Blank means "wherever I am".
-Anything else opens that app on that workspace, using Hyprland's own placement
-rules, so nothing drags your focus around while a mode starts up. Named
-workspaces work as well as numbers.
+```
+ ┌ 1 ┬ 2 ┬ 3 ┬ + ┐          the workspaces this mode opens
+ ├───┴───┴───┴───┴──────────────────────────────────────┐
+ │ Search apps…  │  ┌──────────┬──────────┐             │
+ │ • Alacritty   │  │          │ Firefox  │             │
+ │ • Chromium    │  │  Ghostty ├──────────┤             │
+ │ • Firefox     │  │          │  Slack   │             │
+ │ • Ghostty     │  └──────────┴──────────┘             │
+ └───────────────┴──────────────────────────────────────┘
+```
+
+Each tab is one workspace. A pane is one application.
+
+| To | Do |
+|---|---|
+| Add an application | Drag it in from the left, or click it to fill the selected pane |
+| Split a pane | Drop an application on the pane's edge, or use the split buttons on it |
+| Move an application | Drag its pane onto another pane, or onto another workspace's tab |
+| Swap two applications | Drag one pane onto the other |
+| Resize | Drag the divider between two panes |
+| Remove one | The × on the pane |
+
+The **Workspace** field under the tabs is what that tab actually opens on.
+Blank means "wherever I am". **Land here** marks the workspace the mode leaves
+you on once everything is up; the tab carries a dot to show which one that is.
+
+What the canvas controls is *which workspace* each application opens on and
+*what order* they open in — panes read left to right, top to bottom, and that
+is the order things start. The tiling itself is Hyprland's, so the shape you
+draw is a plan rather than a guarantee: a two-pane row of Ghostty and Firefox
+opens Ghostty first and Firefox second, on that workspace, and your layout
+rules do the rest.
+
+Applications are placed using Hyprland's own placement rules, so nothing drags
+your focus around while a mode starts up. Named workspaces work as well as
+numbers.
 
 A workspace ends up interpolated into a Hyprland dispatch, so the field takes
 Hyprland's own grammar and nothing else: an id (`3`), a relative step (`+1`,
 `e+1`, `m-1`, `r+1`), a keyword (`previous`, `emptynm`), a name (`project`,
 `name:Deep Work`), or a special (`special:magic`). Anything outside that is
-dropped when the mode is saved rather than sent to the compositor.
+refused rather than sent to the compositor.
 
 Some applications, Chromium among them, hand their window to a different
 process than the one Hyprland launched, so the placement rule loses track of
 them. Omara watches for the window and moves it to the right workspace itself
 when that happens, without following it.
 
-**For the mode:** the *Workspace* field is simply where you are left once
-everything is running. Leave it blank to stay put.
-
 So a Coding mode might be:
 
 | | |
 |---|---|
-| Ghostty | ws `1` |
-| Firefox | ws `2` |
-| Slack | ws `3` |
-| Workspace | `1` |
+| Workspace `1` | Ghostty |
+| Workspace `2` | Firefox │ Slack |
+| Land here | `1` |
 
-Three workspaces populated, and you start on the terminal.
+Two workspaces populated, and you start on the terminal.
 
 ### Environment
 
@@ -582,10 +614,22 @@ Everything lives in `~/.config/omarchy/omara.json`:
       "appearance": { "wallpaper": null, "theme": null },
       "notifications": { "dnd": false },
       "audio": { "output": null },
-      "workspaces": { "target": 1 },
+      "workspaces": {
+        "target": 1,
+        "layouts": [
+          { "workspace": "1", "tree": { "app": "p1" } },
+          {
+            "workspace": "2",
+            "tree": {
+              "split": "row", "ratio": 0.5,
+              "children": [{ "app": "p2" }, { "app": "" }]
+            }
+          }
+        ]
+      },
       "applications": [
-        { "desktopId": "com.mitchellh.ghostty", "workspace": 1, "enabled": true },
-        { "command": "chromium --new-window https://github.com", "workspace": 2, "enabled": true }
+        { "uid": "p1", "desktopId": "com.mitchellh.ghostty", "workspace": 1, "enabled": true },
+        { "uid": "p2", "command": "chromium --new-window https://github.com", "workspace": 2, "enabled": true }
       ],
       "commands": { "onActivate": [], "onDeactivate": [] },
       "triggers": [
@@ -600,8 +644,20 @@ Everything lives in `~/.config/omarchy/omara.json`:
 different instruction from `"dnd": null`. The first turns Do Not Disturb off,
 the second does not touch it.
 
-An application has either a `desktopId` or a `command`, never both. `workspace`
-is optional on each.
+An application has either a `desktopId` or a `command`, never both.
+
+`workspaces.layouts` is the canvas: one entry per workspace tab, each holding a
+binary split tree. A node is either a leaf (`{"app": "<uid>"}`, or `""` for an
+empty pane) or a split (`row` puts its two children side by side, `column`
+stacks them, and `ratio` is the first child's share). `uid` is what ties a pane
+to an application across a rename or a reorder.
+
+You do not have to write any of it. `layouts` is optional, and a mode that
+leaves it out — a hand-written one, an older config, an import — gets a layout
+derived from the `workspace` each of its applications already names. On save,
+the two are made to agree: every application sits in exactly one pane, its
+`workspace` is the one its pane belongs to, and `applications` comes back in
+the order the panes read.
 
 Editing the file by hand works; the plugin watches it and reloads live. Replace
 it wholesale (a dotfiles `git checkout`, a restored backup) and the change is
@@ -737,12 +793,13 @@ workspaces. Delete the row you do not want.
 did not match any desktop entry. The command is the lowercased class and usually
 works; if not, delete it and add the app from the picker.
 
-**An app opened on the wrong workspace.** Its `ws` box is blank, so it opened
-wherever you were. Fill it in.
+**An app opened on the wrong workspace.** Its pane is on the *Any* tab, so it
+opened wherever you were. Drag the pane onto the tab you meant, or add that
+workspace with **+** first.
 
 **An application shows "(not installed)".** The mode names a desktop entry
 that is no longer on this machine, usually an imported mode or an app you
-removed. The row is kept so you can see what it pointed at.
+removed. The pane is kept so you can see what it pointed at.
 
 **My audio device says "(not connected)".** The device is not present right now.
 Plug it in and activate again; the mode is not rewritten.
@@ -800,6 +857,7 @@ after you fixed it, `omarchy-restart-shell` clears it.
 | `OmaraMark.qml` | The bar mark, drawn as vector paths so it takes the theme's colour. |
 | `EditorWindow.qml` | The manage / edit overlay. |
 | `ModeForm.qml` | The edit form for one mode. |
+| `WorkspaceCanvas.qml` | The workspace canvas: tabs, the app list, and the drag-and-drop panes. Draws and hit-tests from one `Model.paneRects` call. |
 | `AppPicker.qml` | Installed-application picker, backed by the shell's `AppLibrary`. |
 | `IconPicker.qml` | Glyph grid for the mode icon, backed by `icons.json`. |
 | `ThemePicker.qml` | Installed-theme picker, shipped themes and your own. |

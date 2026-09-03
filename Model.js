@@ -142,7 +142,7 @@ function defaultMode(id, name) {
     appearance: { wallpaper: null, theme: null },
     notifications: { dnd: null },
     audio: { output: null },
-    workspaces: { target: null },
+    workspaces: { target: null, layouts: [] },
     applications: [],
     commands: { onActivate: [], onDeactivate: [] },
     triggers: []
@@ -153,7 +153,7 @@ function defaultMode(id, name) {
 function normalizeApplication(raw) {
   if (typeof raw === "string") {
     var only = raw.trim()
-    return only === "" ? null : { desktopId: "", command: only, workspace: null, note: "", enabled: true }
+    return only === "" ? null : { uid: "", desktopId: "", command: only, workspace: null, note: "", enabled: true }
   }
   if (!isPlainObject(raw)) return null
   var desktopId = asString(raw.desktopId, "").trim()
@@ -161,7 +161,11 @@ function normalizeApplication(raw) {
   var command = asString(raw.command, "").trim()
   if (desktopId === "" && command === "") return null
   if (desktopId !== "") command = ""
+  var uid = asString(raw.uid, "").trim()
   return {
+    // Stable across a rename, a reorder, and a round trip through the config,
+    // which is what lets a pane point at an application instead of an index.
+    uid: UID_PATTERN.test(uid) ? uid : "",
     desktopId: desktopId,
     command: command,
     workspace: asWorkspace(raw.workspace),
@@ -174,6 +178,378 @@ function normalizeApplication(raw) {
 function applicationLabel(app) {
   if (!isPlainObject(app)) return ""
   return app.desktopId ? String(app.desktopId) : String(app.command || "")
+}
+
+// ------------------------------------------------------------ pane layouts
+//
+// A workspace layout is a binary split tree. A leaf is one pane and names at
+// most one application; a split holds two children side by side (`row`) or
+// stacked (`column`), with `ratio` as the first child's share. The tree is
+// what the editor draws and drags around.
+//
+// `applications` stays the flat launch list, and reconcileLayouts keeps the
+// two in step: every application sits in exactly one pane, its `workspace`
+// comes from the layout that pane belongs to, and the launch order is the
+// order the panes read in. That way nothing downstream of the editor —
+// activationPlan, the CLI, an export — has to know panes exist.
+
+var MAX_LAYOUTS = 24
+var MAX_PANES = 32
+var MAX_SPLIT_DEPTH = 6
+var MIN_RATIO = 0.1
+var MAX_RATIO = 0.9
+var UID_PATTERN = /^[A-Za-z0-9_-]{1,24}$/
+
+function clampRatio(value) {
+  var n = Number(value)
+  if (!isFinite(n)) return 0.5
+  if (n < MIN_RATIO) return MIN_RATIO
+  if (n > MAX_RATIO) return MAX_RATIO
+  return n
+}
+
+function paneLeaf(uid) {
+  return { app: asString(uid, "") }
+}
+
+function paneSplitNode(direction, first, second, ratio) {
+  return {
+    split: direction === "column" ? "column" : "row",
+    ratio: clampRatio(ratio),
+    children: [first, second]
+  }
+}
+
+function isPaneSplit(node) {
+  return isPlainObject(node) && Array.isArray(node.children) && node.children.length === 2
+}
+
+// A path names a node by the turns taken from the root: "" is the root, "01"
+// is the second child of the first child. One character per level, so it is
+// also a stable identity for a delegate and cheap to compare.
+function paneAt(tree, path) {
+  var node = tree
+  var p = String(path === null || path === undefined ? "" : path)
+  for (var i = 0; i < p.length; i++) {
+    if (!isPaneSplit(node)) return null
+    node = node.children[p.charAt(i) === "0" ? 0 : 1]
+  }
+  return isPlainObject(node) ? node : null
+}
+
+function paneReplaceAt(tree, path, next) {
+  var p = String(path === null || path === undefined ? "" : path)
+  if (p === "") return next
+  var root = clone(tree)
+  var node = root
+  for (var i = 0; i < p.length - 1; i++) {
+    if (!isPaneSplit(node)) return tree
+    node = node.children[p.charAt(i) === "0" ? 0 : 1]
+  }
+  if (!isPaneSplit(node)) return tree
+  node.children[p.charAt(p.length - 1) === "0" ? 0 : 1] = next
+  return root
+}
+
+function paneCount(node) {
+  if (!isPaneSplit(node)) return 1
+  return paneCount(node.children[0]) + paneCount(node.children[1])
+}
+
+// Depth-first, which is also reading order: left before right, top before
+// bottom. Launch order follows it, so what you see is the order things start.
+function paneApps(node, out) {
+  var list = Array.isArray(out) ? out : []
+  if (!isPaneSplit(node)) {
+    var uid = asString(node && node.app, "")
+    if (uid !== "") list.push(uid)
+    return list
+  }
+  paneApps(node.children[0], list)
+  paneApps(node.children[1], list)
+  return list
+}
+
+function paneFindApp(node, uid, path) {
+  var want = asString(uid, "")
+  if (want === "") return null
+  var here = String(path === null || path === undefined ? "" : path)
+  if (!isPaneSplit(node)) return asString(node && node.app, "") === want ? here : null
+  return paneFindApp(node.children[0], want, here + "0")
+    || paneFindApp(node.children[1], want, here + "1")
+}
+
+// The first empty pane in reading order, or null when every pane is taken.
+function paneFirstEmpty(node, path) {
+  var here = String(path === null || path === undefined ? "" : path)
+  if (!isPaneSplit(node)) return asString(node && node.app, "") === "" ? here : null
+  return paneFirstEmpty(node.children[0], here + "0")
+    || paneFirstEmpty(node.children[1], here + "1")
+}
+
+function paneLastLeaf(node, path) {
+  var here = String(path === null || path === undefined ? "" : path)
+  if (!isPaneSplit(node)) return here
+  return paneLastLeaf(node.children[1], here + "1")
+}
+
+function paneSplitAt(tree, path, direction) {
+  var node = paneAt(tree, path)
+  if (!isPlainObject(node) || isPaneSplit(node)) return tree
+  if (String(path || "").length >= MAX_SPLIT_DEPTH) return tree
+  if (paneCount(tree) >= MAX_PANES) return tree
+  return paneReplaceAt(tree, path,
+    paneSplitNode(direction, paneLeaf(node.app), paneLeaf(""), 0.5))
+}
+
+// Removing a pane promotes its sibling into the parent's place, which is what
+// a tiling window manager does when a window closes, and keeps the tree from
+// growing single-child splits it has no way to draw.
+function paneRemoveAt(tree, path) {
+  var p = String(path === null || path === undefined ? "" : path)
+  if (p === "") return paneLeaf("")
+  var parentPath = p.slice(0, -1)
+  var parent = paneAt(tree, parentPath)
+  if (!isPaneSplit(parent)) return tree
+  return paneReplaceAt(tree, parentPath, clone(parent.children[p.charAt(p.length - 1) === "0" ? 1 : 0]))
+}
+
+function paneSetAppAt(tree, path, uid) {
+  var node = paneAt(tree, path)
+  if (!isPlainObject(node) || isPaneSplit(node)) return tree
+  return paneReplaceAt(tree, path, paneLeaf(uid))
+}
+
+function paneSetRatioAt(tree, path, ratio) {
+  var node = paneAt(tree, path)
+  if (!isPaneSplit(node)) return tree
+  var next = clone(node)
+  next.ratio = clampRatio(ratio)
+  return paneReplaceAt(tree, path, next)
+}
+
+// Adds an application without being told where: it fills the first empty pane,
+// and splits the last one when there is none. The direction alternates with
+// depth so a list of applications lands as a grid rather than a row of slivers.
+// Returns the tree unchanged once the pane budget is spent.
+function paneAppend(tree, uid) {
+  var empty = paneFirstEmpty(tree, "")
+  if (empty !== null) return paneSetAppAt(tree, empty, uid)
+  var last = paneLastLeaf(tree, "")
+  var split = paneSplitAt(tree, last, last.length % 2 === 0 ? "row" : "column")
+  if (split === tree) return tree
+  return paneSetAppAt(split, last + "1", uid)
+}
+
+function paneRemoveApp(tree, uid) {
+  var path = paneFindApp(tree, uid, "")
+  if (path === null) return tree
+  return paneRemoveAt(tree, path)
+}
+
+// Geometry for one tree. Everything the canvas draws comes from here, so the
+// hit testing, the dividers, and the panes cannot drift apart. `gap` is the
+// divider thickness and is taken out of the split, not added around it, so the
+// rectangles always add up to the size handed in.
+function paneRects(tree, width, height, gap) {
+  var out = { panes: [], dividers: [] }
+  var g = Number(gap)
+  if (!isFinite(g) || g < 0) g = 0
+  var w = Math.max(0, Number(width) || 0)
+  var h = Math.max(0, Number(height) || 0)
+  collectPaneRects(isPlainObject(tree) ? tree : paneLeaf(""), 0, 0, w, h, g, "", out)
+  return out
+}
+
+function collectPaneRects(node, x, y, w, h, gap, path, out) {
+  if (!isPaneSplit(node)) {
+    out.panes.push({
+      path: path, app: asString(node && node.app, ""),
+      x: x, y: y, width: w, height: h
+    })
+    return
+  }
+  var ratio = clampRatio(node.ratio)
+  if (node.split === "column") {
+    var top = Math.max(0, (h - gap) * ratio)
+    collectPaneRects(node.children[0], x, y, w, top, gap, path + "0", out)
+    out.dividers.push({
+      path: path, direction: "column",
+      x: x, y: y + top, width: w, height: gap,
+      spanX: x, spanY: y, spanWidth: w, spanHeight: h
+    })
+    collectPaneRects(node.children[1], x, y + top + gap, w, Math.max(0, h - gap - top), gap, path + "1", out)
+    return
+  }
+  var left = Math.max(0, (w - gap) * ratio)
+  collectPaneRects(node.children[0], x, y, left, h, gap, path + "0", out)
+  out.dividers.push({
+    path: path, direction: "row",
+    x: x + left, y: y, width: gap, height: h,
+    spanX: x, spanY: y, spanWidth: w, spanHeight: h
+  })
+  collectPaneRects(node.children[1], x + left + gap, y, Math.max(0, w - gap - left), h, gap, path + "1", out)
+}
+
+function normalizePaneNode(raw, depth, budget) {
+  if (!isPlainObject(raw)) return paneLeaf("")
+  if (isPaneSplit(raw) && depth < MAX_SPLIT_DEPTH && budget.panes < MAX_PANES) {
+    // A split turns one pane into two, so it costs one against the budget.
+    budget.panes++
+    var first = normalizePaneNode(raw.children[0], depth + 1, budget)
+    var second = normalizePaneNode(raw.children[1], depth + 1, budget)
+    return paneSplitNode(raw.split, first, second, raw.ratio)
+  }
+  var uid = asString(raw.app, "").trim()
+  return paneLeaf(UID_PATTERN.test(uid) ? uid : "")
+}
+
+// A layout's workspace is either a reference Hyprland can name or "", which
+// means "wherever you are". A workspace that is neither is not a workspace,
+// so the layout it labels is dropped rather than silently retargeted.
+function normalizeLayouts(raw) {
+  var list = Array.isArray(raw) ? raw : []
+  var limit = list.length < MAX_LAYOUTS ? list.length : MAX_LAYOUTS
+  var seen = Object.create(null)
+  var out = []
+  for (var i = 0; i < limit; i++) {
+    var item = isPlainObject(list[i]) ? list[i] : {}
+    var target = item.workspace
+    var ws = ""
+    if (target !== null && target !== undefined && String(target) !== "") {
+      ws = workspaceRef(target)
+      if (ws === "") continue
+    }
+    if (seen["w:" + ws]) continue
+    seen["w:" + ws] = true
+    out.push({ workspace: ws, tree: normalizePaneNode(item.tree, 0, { panes: 1 }) })
+  }
+  return out
+}
+
+function paneUid(taken) {
+  var n = 1
+  while (taken["p" + n]) n++
+  return "p" + n
+}
+
+// Every application carries a uid so a pane can name it across a reorder. One
+// is minted here for anything that arrives without a usable one — an import, a
+// capture, or a config written by hand.
+function assignApplicationUids(apps) {
+  var taken = Object.create(null)
+  var i
+  for (i = 0; i < apps.length; i++) {
+    var have = asString(apps[i].uid, "")
+    if (UID_PATTERN.test(have) && !taken[have]) taken[have] = true
+    else apps[i].uid = ""
+  }
+  for (i = 0; i < apps.length; i++) {
+    if (apps[i].uid !== "") continue
+    var fresh = paneUid(taken)
+    taken[fresh] = true
+    apps[i].uid = fresh
+  }
+  return apps
+}
+
+function freshApplicationUid(apps) {
+  var taken = Object.create(null)
+  var list = Array.isArray(apps) ? apps : []
+  for (var i = 0; i < list.length; i++) {
+    var uid = asString(list[i] && list[i].uid, "")
+    if (uid !== "") taken[uid] = true
+  }
+  return paneUid(taken)
+}
+
+// The one place where panes and applications are made to agree. Called on
+// every normalize and after every edit in the editor, so neither side can be
+// read while the other is half-updated.
+function reconcileLayouts(applications, layouts) {
+  var apps = Array.isArray(applications) ? applications : []
+  var known = Object.create(null)
+  var placed = Object.create(null)
+  var i
+  for (i = 0; i < apps.length; i++) known["u:" + apps[i].uid] = apps[i]
+
+  // Pass one: a pane may only name an application that exists, and only once.
+  // Anything else is emptied rather than dropped, so the shape survives.
+  var out = []
+  var source = Array.isArray(layouts) ? layouts : []
+  for (i = 0; i < source.length; i++)
+    out.push({ workspace: source[i].workspace, tree: claimPanes(source[i].tree, known, placed) })
+
+  // Pass two: an application no pane claimed joins the layout for the
+  // workspace it already names, which is how a captured or imported mode
+  // arrives with a layout it never stored.
+  for (i = 0; i < apps.length; i++) {
+    if (placed["u:" + apps[i].uid]) continue
+    var ws = apps[i].workspace === null || apps[i].workspace === undefined
+      ? "" : workspaceRef(apps[i].workspace)
+    var layout = null
+    for (var k = 0; k < out.length; k++) if (out[k].workspace === ws) { layout = out[k]; break }
+    if (!layout) {
+      if (out.length >= MAX_LAYOUTS) continue
+      layout = { workspace: ws, tree: paneLeaf("") }
+      out.push(layout)
+    }
+    var grown = paneAppend(layout.tree, apps[i].uid)
+    if (grown === layout.tree) continue
+    layout.tree = grown
+    placed["u:" + apps[i].uid] = true
+  }
+
+  // A mode with nothing in it still needs somewhere to drop the first thing.
+  if (out.length === 0) out.push({ workspace: "", tree: paneLeaf("") })
+
+  // Pass three: the layout an application ended up in is its workspace, and
+  // the order the panes read in is the order it launches in.
+  var ordered = []
+  for (i = 0; i < out.length; i++) {
+    var uids = paneApps(out[i].tree, [])
+    for (var u = 0; u < uids.length; u++) {
+      var app = known["u:" + uids[u]]
+      if (!app) continue
+      // Back through asWorkspace so a numeric workspace stays a number, the
+      // shape everything downstream of normalizeApplication already reads.
+      app.workspace = asWorkspace(out[i].workspace)
+      ordered.push(app)
+    }
+  }
+  // An application the pane budget could not take keeps the workspace it had.
+  for (i = 0; i < apps.length; i++)
+    if (!placed["u:" + apps[i].uid]) ordered.push(apps[i])
+
+  return { applications: ordered, layouts: out }
+}
+
+function claimPanes(node, known, placed) {
+  if (!isPaneSplit(node)) {
+    var uid = asString(node && node.app, "")
+    if (uid === "" || !known["u:" + uid] || placed["u:" + uid]) return paneLeaf("")
+    placed["u:" + uid] = true
+    return paneLeaf(uid)
+  }
+  return paneSplitNode(node.split,
+    claimPanes(node.children[0], known, placed),
+    claimPanes(node.children[1], known, placed),
+    node.ratio)
+}
+
+// Reconciles a mode in place-ish: returns a copy with `applications` and
+// `workspaces.layouts` agreeing. The editor calls this after every pane edit
+// so the draft it draws is the draft it would save.
+function reconcileMode(mode) {
+  if (!isPlainObject(mode)) return mode
+  var next = clone(mode)
+  var apps = Array.isArray(next.applications) ? next.applications : []
+  assignApplicationUids(apps)
+  if (!isPlainObject(next.workspaces)) next.workspaces = { target: null, layouts: [] }
+  var settled = reconcileLayouts(apps, next.workspaces.layouts)
+  next.applications = settled.applications
+  next.workspaces.layouts = settled.layouts
+  return next
 }
 
 function normalizeTrigger(raw) {
@@ -231,6 +607,14 @@ function normalizeMode(raw, takenIds) {
     var app = normalizeApplication(apps[i])
     if (app) ctx.applications.push(app)
   }
+
+  // Panes last, once the applications they name are known and capped. A mode
+  // that never stored a layout gets one derived from the workspace each of its
+  // applications already asked for.
+  assignApplicationUids(ctx.applications)
+  var settled = reconcileLayouts(ctx.applications, normalizeLayouts(workspaces.layouts))
+  ctx.applications = settled.applications
+  ctx.workspaces.layouts = settled.layouts
 
   var commands = isPlainObject(raw.commands) ? raw.commands : {}
   ctx.commands.onActivate = asStringList(commands.onActivate, MAX_HOOKS, MAX_COMMAND)
@@ -1022,6 +1406,8 @@ var Glyph = {
   chevronUp: "\u{f0143}",
   chevronDown: "\u{f0140}",
   chevronRight: "\u{f0142}",
+  splitVertical: "\u{f0bcc}",
+  splitHorizontal: "\u{f0bcb}",
   settings: "\u{f0493}",
   capture: "\u{f0100}",
   blank: "\u{f0224}",
@@ -1134,6 +1520,28 @@ if (typeof module !== "undefined" && module.exports) {
     defaultMode: defaultMode,
     normalizeApplication: normalizeApplication,
     applicationLabel: applicationLabel,
+    MAX_LAYOUTS: MAX_LAYOUTS,
+    MAX_PANES: MAX_PANES,
+    MAX_SPLIT_DEPTH: MAX_SPLIT_DEPTH,
+    clampRatio: clampRatio,
+    paneLeaf: paneLeaf,
+    isPaneSplit: isPaneSplit,
+    paneAt: paneAt,
+    paneCount: paneCount,
+    paneApps: paneApps,
+    paneFindApp: paneFindApp,
+    paneFirstEmpty: paneFirstEmpty,
+    paneSplitAt: paneSplitAt,
+    paneRemoveAt: paneRemoveAt,
+    paneSetAppAt: paneSetAppAt,
+    paneSetRatioAt: paneSetRatioAt,
+    paneAppend: paneAppend,
+    paneRemoveApp: paneRemoveApp,
+    paneRects: paneRects,
+    normalizeLayouts: normalizeLayouts,
+    freshApplicationUid: freshApplicationUid,
+    reconcileLayouts: reconcileLayouts,
+    reconcileMode: reconcileMode,
     hyprlandExecRule: hyprlandExecRule,
     luaQuote: luaQuote,
     isWorkspaceRef: isWorkspaceRef,
