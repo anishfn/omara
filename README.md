@@ -1,29 +1,31 @@
 <p align="center">
-  <img src="assets/omara.png" alt="Omara" width="180">
+  <img src="assets/omara.png" alt="Workspace Modes" width="180">
 </p>
 
-<h1 align="center">Omara</h1>
+<h1 align="center">Workspace Modes</h1>
 
 <p align="center"><strong>Switch your entire desktop into the way you work.</strong></p>
 
 A *mode* is a way your desktop is set up. Coding, Gaming, Deep Work, whatever
 you actually do. Pick one and Omarchy becomes that: your apps open on the
-workspaces you want them on, notifications behave, audio goes where it should,
-and you land exactly where you meant to start.
+workspaces you laid them out on, notifications behave, audio goes where it
+should, and you land exactly where you meant to start.
 
 ```
-Coding                          Deep Work
-  Ghostty        ws 1             Do Not Disturb    on
-  Firefox        ws 2             Theme             gruvbox
-  Slack          ws 3             Workspace         3
-  Do Not Disturb off              Everything else   left alone
-  Land on        ws 1
+Coding                              Deep Work
+  ws 1  ┌─────────┬─────────┐         Do Not Disturb   on
+        │         │ Firefox │         Theme            gruvbox
+        │ Ghostty ├─────────┤         Land on          ws 3
+        │         │ Slack   │         Everything else  left alone
+        └─────────┴─────────┘
+  ws 2  Obsidian
+  Land on  ws 1
 ```
 
-One click, or `omara activate coding`.
+You draw that layout; you do not type it. One click, or `omara activate coding`.
 
-Local-first. No account, no cloud, no telemetry, no network access. Omara
-ships **empty**: nothing exists until you make it.
+Local-first. No account, no cloud, no telemetry, no network access. Workspace
+Modes ships **empty**: nothing exists until you make it.
 
 ---
 
@@ -83,12 +85,12 @@ one per action.
 
 ## What it is not
 
-**A session manager.** Omara does not save or restore window layouts, and it
-never will. The workspace canvas is a plan for what a mode *opens* — which
-workspace each application lands on and in what order — not a snapshot of
-where your windows happen to be sitting, and Omara never reads geometry back
-off the screen. Tools that snapshot your Hyprland windows already do that job,
-and Omara is built to sit alongside one.
+**A session manager.** Workspace Modes does not save or restore window layouts,
+and it never will. The workspace canvas is a plan for what a mode *opens* —
+which workspace each application lands on and in what order — not a snapshot of
+where your windows happen to be sitting, and Workspace Modes never reads
+geometry back off the screen. Tools that snapshot your Hyprland windows already
+do that job, and Workspace Modes is built to sit alongside one.
 
 | A session manager restores | A mode changes |
 |---|---|
@@ -107,8 +109,8 @@ and Omara is built to sit alongside one.
 | Omarchy | 4.0 (Quattro) or newer |
 | Everything else | already on your system: Quickshell, Hyprland, PipeWire, `jq` |
 
-Omara installs nothing, pulls no dependencies, and makes no network request
-after the clone.
+Workspace Modes installs nothing, pulls no dependencies, and makes no network
+request after the clone.
 
 Check you are on a new enough Omarchy:
 
@@ -155,7 +157,7 @@ omarchy plugin enable io.github.anishfn.omara --section left
 
 ```bash
 omarchy plugin list | grep modes
-# io.github.anishfn.omara   enabled   third-party   bar-widget,service   Omara
+# io.github.anishfn.omara   enabled   third-party   bar-widget,service   Workspace Modes
 ```
 
 The widget appears in your bar immediately, reading `○ No mode`. If it does
@@ -211,13 +213,15 @@ desktop back the way it was.
 | `~/.config/omarchy/omara.json` | your modes, safe to version-control |
 | `~/.local/state/omarchy/omara-state.json` | what to put back on *Disable mode* |
 
-Those three are the only paths Omara writes.
+Those three are the only paths Workspace Modes writes.
 
 ---
 
 ## Quick start
 
-1. **Click the widget** in your bar. On first run it reads `○ No mode`.
+![The switcher](screenshots/switcher.png)
+
+1. **Click the widget** in your bar. On first run it reads `No mode`.
    There are no modes until you make one.
 2. **Create a mode.** Fastest way: set your desktop up the way you like it,
    then press the camera, which captures what is open, where, and how.
@@ -227,10 +231,10 @@ Those three are the only paths Omara writes.
    1, browser on 2, chat on 3. Drop an app on the edge of a pane to split it.
 4. **Set where you land.** Press the flag on whichever tab you want the mode
    to leave you on.
-5. **Set the mood.** Under *Environment*: Do Not Disturb, audio output,
-   wallpaper, and **Theme**, each picked from a list rather than typed.
+5. **Set the mood.** Under **Options**: Do Not Disturb, audio output,
+   wallpaper, and theme, each picked from a list rather than typed.
 6. **Save**, then click the mode in the bar popup. If windows are already
-   open, Omara asks whether to close them first.
+   open, Workspace Modes asks whether to close them first.
 
 Your apps open across their workspaces without the screen flicking through each
 one, and you end up on the workspace you chose.
@@ -321,9 +325,9 @@ want is a pane you close.
 
 ![Choosing an icon](screenshots/icon-picker.png)
 
-The icon box next to the name, under **Options**, opens a searchable grid. Search by what you are
-doing (`code`, `game`, `focus`, `music`, `terminal`) or browse. **No icon** is
-always there.
+The icon box next to the name, under **Options**, opens a searchable grid.
+Search by what you are doing (`code`, `game`, `focus`, `music`, `terminal`) or
+browse. **No icon** is always there.
 
 The set is drawn from the glyphs Omarchy's own menu ships, so everything in the
 grid is guaranteed to render in your font rather than showing up as an empty
@@ -382,10 +386,10 @@ Hyprland's own grammar and nothing else: an id (`3`), a relative step (`+1`,
 `name:Deep Work`), or a special (`special:magic`). Anything outside that is
 refused rather than sent to the compositor.
 
-Some applications, Chromium among them, hand their window to a different
-process than the one Hyprland launched, so the placement rule loses track of
-them. Omara watches for the window and moves it to the right workspace itself
-when that happens, without following it.
+Some applications, Chromium among them, hand their window to a different process
+than the one Hyprland launched, so the placement rule loses track of them.
+Workspace Modes watches for the window and moves it to the right workspace
+itself when that happens, without following it.
 
 So a Coding mode might be:
 
@@ -398,6 +402,12 @@ So a Coding mode might be:
 Two workspaces populated, and you start on the terminal.
 
 ### Environment
+
+![Options](screenshots/options.png)
+
+Everything that is not the workspace canvas lives behind **Options**: what the
+mode is called, its icon, what it does to the environment, and the commands and
+triggers under *Advanced*. Duplicate and Delete are at the bottom.
 
 | Field | Options |
 |---|---|
@@ -425,11 +435,12 @@ These are shell strings, run as `bash -lc '<your string>'` — a login shell, so
 your `~/.bash_profile` and `PATH` apply, and pipelines, redirects, `&&` and
 substitution all work. That is the reason to write one instead of adding an
 application, and it is also the whole of the trust you are extending: the string
-is not parsed, escaped, or restricted by Omara, and a line here can do anything
-you can do at a prompt. It is the one field in Omara that works this way.
+is not parsed, escaped, or restricted by Workspace Modes, and a line here can do
+anything you can do at a prompt. It is the one field in Workspace Modes that
+works this way.
 
-Omara does not guess at inverses. If a command changes something you want put
-back, write the inverse yourself:
+Workspace Modes does not guess at inverses. If a command changes something you
+want put back, write the inverse yourself:
 
 ```
 On activate     omarchy-toggle-idle stay-awake
@@ -492,7 +503,7 @@ Switching straight from Coding to Gaming does the same thing: Coding's
 
 A mode opens its own applications, so switching into one on top of a full
 desktop leaves you with both. When you click a mode and something is open,
-Omara asks first:
+Workspace Modes asks first:
 
 - **Close them** closes every open window, then activates the mode. The
   close is the same request the compositor sends when you hit a window's close
@@ -512,10 +523,11 @@ say otherwise with `omara activate <id> --close`.
 
 ## Keybindings
 
-Omara registers no shortcuts. Add what you like to your Hyprland config:
+Workspace Modes registers no shortcuts. Add what you like to your Hyprland
+config:
 
 ```
-bindd = SUPER, C, Omara, exec, omara menu
+bindd = SUPER, C, Workspace Modes, exec, omara menu
 bindd = SUPER SHIFT, C, Coding mode, exec, omara activate coding
 bindd = SUPER ALT, C, Manage modes, exec, omara manage
 ```
@@ -523,7 +535,7 @@ bindd = SUPER ALT, C, Manage modes, exec, omara manage
 Without the CLI on your `PATH`, go through the shell directly:
 
 ```
-bindd = SUPER, C, Omara, exec, omarchy-shell shell toggle io.github.anishfn.omara
+bindd = SUPER, C, Workspace Modes, exec, omarchy-shell shell toggle io.github.anishfn.omara
 ```
 
 ---
@@ -688,8 +700,8 @@ picked up within a minute, or immediately with `omara reload`.
 
 ## Security
 
-Omara runs unsandboxed inside `omarchy-shell`, like every Omarchy plugin.
-Precisely what that means here:
+Workspace Modes runs unsandboxed inside `omarchy-shell`, like every Omarchy
+plugin. Precisely what that means here:
 
 **It never** makes a network request, downloads or evaluates code from anywhere,
 collects telemetry, runs anything on install or import, writes outside
@@ -723,7 +735,7 @@ everything else meaningful. The one deliberate exception is the availability
 check for your own configured applications, which has to use your `PATH`,
 because that is the thing being tested.
 
-Every process Omara reads output from runs under
+Every process Workspace Modes reads output from runs under
 `timeout -k 2` and is capped at the source — bytes, lines and item counts — with
 a QML watchdog behind it for a child that is unkillable rather than slow. None
 of it can wedge the shell: a FIFO where `theme.name` should be ends the read at
@@ -733,12 +745,13 @@ inherit one.
 
 **Actions report their real outcome, and land in order.** Setting a theme,
 wallpaper, audio output or Do Not Disturb, and launching a desktop entry, all
-run supervised: Omara waits for the exit code and an activation does not claim
-success while something it needed has failed or is still trying. They also run
-one at a time, in the order they were asked for, because two theme changes in
-flight at once can land in either order and leave the desktop showing something
-other than the mode that was reported. A verdict from a switch you have since
-replaced is logged, but it does not announce itself as the mode you are in.
+run supervised: Workspace Modes waits for the exit code and an activation does
+not claim success while something it needed has failed or is still trying. They
+also run one at a time, in the order they were asked for, because two theme
+changes in flight at once can land in either order and leave the desktop showing
+something other than the mode that was reported. A verdict from a switch you
+have since replaced is logged, but it does not announce itself as the mode you
+are in.
 
 Stopping the wait is not the same as stopping the process. An action that
 overruns its reporting deadline is left running — killing `omarchy-theme-set`
@@ -753,8 +766,8 @@ missing applications.
 **Files carry their guarantees in the open itself.** Quickshell's `FileView`
 takes a pathname and reads to the end: no `O_NOFOLLOW`, no non-blocking open, no
 size ceiling. Checking the name first and then handing the same name over only
-narrows that window, so Omara does not use `FileView` at all. Reads go through
-`dd iflag=nofollow,nonblock` with a hard `count`×`bs` ceiling, beneath a
+narrows that window, so Workspace Modes does not use `FileView` at all. Reads go
+through `dd iflag=nofollow,nonblock` with a hard `count`×`bs` ceiling, beneath a
 directory verified to be yours and not writable by anyone else — a symlink is
 refused by the open, a FIFO returns empty instead of blocking, and an oversized
 file is cut off. Writes are the same transaction from the other side: a fresh
@@ -834,7 +847,7 @@ dialog would otherwise open behind it. If the chooser fails to start at all,
 the file could not be parsed, a copy was saved as `omara.json.corrupt` and
 the plugin started from defaults rather than overwriting your only copy.
 
-**The theme list is empty.** Omara reads `$OMARCHY_PATH/themes` and
+**The theme list is empty.** Workspace Modes reads `$OMARCHY_PATH/themes` and
 `~/.config/omarchy/themes`. If `omarchy theme list` prints themes and the picker
 does not, `omarchy-restart-shell`.
 
@@ -875,7 +888,7 @@ after you fixed it, `omarchy-restart-shell` clears it.
 | `Service.qml` | Config file, runtime snapshot, activation, triggers, the `omara` IPC target, and the editor window. |
 | `BarWidget.qml` | Bar button and switcher popup. |
 | `ModeRow.qml` | One mode in a list. Reserves the icon slot whether or not the mode filled it, so names line up. |
-| `OmaraMark.qml` | The bar mark, drawn as vector paths so it takes the theme's colour. |
+| `OmaraMark.qml` | The bar mark, drawn as three rectangles on a nine-unit grid so it takes the theme's colour and lands on whole pixels. |
 | `EditorWindow.qml` | The manage / edit overlay. |
 | `ModeForm.qml` | The edit form for one mode. |
 | `WorkspaceCanvas.qml` | The workspace canvas: tabs, the app list, and the drag-and-drop panes. Draws and hit-tests from one `Model.paneRects` call. |

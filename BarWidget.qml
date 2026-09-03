@@ -24,7 +24,7 @@ BarWidget {
   readonly property string modeIcon: activeMode && activeMode.icon ? String(activeMode.icon) : ""
   readonly property string modeName: activeMode ? String(activeMode.name) : "No mode"
 
-  // The mark is the Omara logo until a mode brings its own icon, so the bar
+  // The mark is the Workspace Modes logo until a mode brings its own icon, so the bar
   // says which mode you are in before it says whose plugin this is.
   readonly property bool showLogo: root.showIcon && root.modeIcon === ""
   readonly property string glyphText: root.showIcon && root.modeIcon !== "" ? root.modeIcon : ""
