@@ -874,7 +874,7 @@ after you fixed it, `omarchy-restart-shell` clears it.
 | `Model.js` | Schema, activation plans, triggers, import/export, and the bounded parsers for subprocess output. No Qt and no Quickshell, which is why node can test it. |
 | `Service.qml` | Config file, runtime snapshot, activation, triggers, the `omara` IPC target, and the editor window. |
 | `BarWidget.qml` | Bar button and switcher popup. |
-| `ModeRow.qml` | One mode in a list. |
+| `ModeRow.qml` | One mode in a list. Reserves the icon slot whether or not the mode filled it, so names line up. |
 | `OmaraMark.qml` | The bar mark, drawn as vector paths so it takes the theme's colour. |
 | `EditorWindow.qml` | The manage / edit overlay. |
 | `ModeForm.qml` | The edit form for one mode. |

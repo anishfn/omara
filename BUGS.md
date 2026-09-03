@@ -112,20 +112,7 @@ already exists.
 
 ---
 
-### 7. The keyboard cursor in the bar popup reaches invisible rows
-
-`BarWidget.qml` — `rowCount`, `activateCursor()`
-
-`rowCount` is `modes.length + 3` unconditionally, but *New mode*, *Manage
-modes* and *Disable mode* are all `visible: modes.length > 0`. With no modes
-configured the popup shows one button and the cursor still has three stops: two
-of them highlight nothing and fire an action anyway.
-
-Fix: derive `rowCount` from what is actually on screen.
-
----
-
-### 8. A capture and an activation share one probe result
+### 7. A capture and an activation share one probe result
 
 `Service.qml` — `probeResult`
 
@@ -142,7 +129,7 @@ supersession that already exists within each.
 
 ---
 
-### 9. A renamed copy skips normalization
+### 8. A renamed copy skips normalization
 
 `Model.js` — `importModes()`, the `copy` branch
 

@@ -64,20 +64,28 @@ Item {
       font.pixelSize: Style.font.bodySmall
     }
 
-    Text {
+    // The slot is there whether or not the mode filled it, so a list of modes
+    // reads as one column of names rather than as two.
+    Item {
+      id: iconSlot
       anchors.verticalCenter: parent.verticalCenter
-      visible: root.icon !== ""
-      textFormat: Text.PlainText
-      text: root.icon
-      color: root.disabled ? root.dim : root.foreground
-      font.family: root.fontFamily
-      font.pixelSize: Style.font.icon
+      width: Style.font.icon
+      height: Style.font.icon
+
+      Text {
+        anchors.centerIn: parent
+        visible: root.icon !== ""
+        textFormat: Text.PlainText
+        text: root.icon
+        color: root.disabled ? root.dim : root.foreground
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.icon
+      }
     }
 
     Column {
       anchors.verticalCenter: parent.verticalCenter
-      width: layout.width - layout.spacing * (root.icon !== "" ? 3 : 2)
-        - bullet.width - (root.icon !== "" ? iconLabel.width : 0)
+      width: layout.width - layout.spacing * 3 - bullet.width - iconSlot.width
         - Math.max(check.width, root.reorderable ? Style.space(40) : 0)
       spacing: Style.space(1)
 
@@ -111,14 +119,6 @@ Item {
     text: "●"
     font.family: root.fontFamily
     font.pixelSize: Style.font.bodySmall
-  }
-
-  Text {
-    id: iconLabel
-    visible: false
-    text: root.icon
-    font.family: root.fontFamily
-    font.pixelSize: Style.font.icon
   }
 
   Text {
