@@ -823,10 +823,15 @@ Item {
               // Sized to the chips, so New and Capture sit next to the last
               // mode rather than across the card from it. It only becomes a
               // scroller once there are more modes than the row can hold.
+              //
+              // Whole pixels, with one to spare on every side. Clipping is a
+              // scissor rectangle: a chip sized to the content exactly puts
+              // its border on the boundary, and the boundary is where a real
+              // gets rounded away — which took the edge off the last chip.
               Layout.fillWidth: true
-              Layout.maximumWidth: chips.implicitWidth
-              Layout.preferredHeight: chips.implicitHeight
-              contentWidth: chips.implicitWidth
+              Layout.maximumWidth: Math.ceil(chips.implicitWidth) + 2
+              Layout.preferredHeight: Math.ceil(newMode.implicitHeight) + 2
+              contentWidth: Math.ceil(chips.implicitWidth) + 2
               contentHeight: height
               clip: true
               flickableDirection: Flickable.HorizontalFlick
@@ -834,6 +839,8 @@ Item {
 
               Row {
                 id: chips
+                x: 1
+                y: 1
                 spacing: Style.space(4)
 
                 Repeater {
@@ -851,6 +858,10 @@ Item {
                     foreground: modelData.enabled === false ? root.dim : root.foreground
                     fontFamily: root.fontFamily
                     fontSize: Style.font.bodySmall
+                    // A mode with no icon is a shorter row of content than a
+                    // mode with one, and a row of chips that changes height
+                    // per mode reads as a row of chips that are cut off.
+                    height: newMode.implicitHeight
                     tooltipText: modelData.description || ""
                     Accessible.name: "Edit the mode " + modelData.name
                     onClicked: root.requestSelect(modelData.id)
@@ -860,6 +871,7 @@ Item {
             }
 
             Button {
+              id: newMode
               iconText: Model.Glyph.add
               tooltipText: "New mode  ·  Ctrl+N"
               focusable: true
