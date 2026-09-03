@@ -1438,3 +1438,12 @@ test("moving a workspace moves what is in it, not the number on it", () => {
   // at has almost certainly just been renumbered underneath it.
   assert.match(qml, /function moveWorkspace[\s\S]*?workspaces\.target = Model\.asWorkspace\(/)
 })
+
+test("a workspace tab says what is in it", () => {
+  const qml = read("WorkspaceCanvas.qml")
+  // Dragging moves the contents and leaves the numbers in place, so the strip
+  // reads 1 2 3 before and after. Without a count on the tab there is nothing
+  // on screen that changed, and the drag reads as broken.
+  assert.match(qml, /readonly property int filled: Model\.paneApps\(modelData\.tree, \[\]\)\.length/)
+  assert.match(qml, /visible: cell\.filled > 0/)
+})
