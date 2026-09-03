@@ -198,11 +198,15 @@ test("settings-only activation never launches apps or runs commands", () => {
 
 test("an application is either a desktop entry or a raw command, never both", () => {
   assert.deepEqual(Model.normalizeApplication("ghostty"),
-    { desktopId: "", command: "ghostty", workspace: null, note: "", enabled: true })
+    { uid: "", desktopId: "", command: "ghostty", workspace: null, note: "", enabled: true })
   assert.deepEqual(Model.normalizeApplication({ desktopId: "org.foo.Bar" }),
-    { desktopId: "org.foo.Bar", command: "", workspace: null, note: "", enabled: true })
+    { uid: "", desktopId: "org.foo.Bar", command: "", workspace: null, note: "", enabled: true })
   assert.deepEqual(Model.normalizeApplication({ desktopId: "a", command: "b" }),
-    { desktopId: "a", command: "", workspace: null, note: "", enabled: true })
+    { uid: "", desktopId: "a", command: "", workspace: null, note: "", enabled: true })
+  // A uid is only carried, never invented, so a lone application is still the
+  // same object it was; normalizeMode is what mints one.
+  assert.equal(Model.normalizeApplication({ desktopId: "a", uid: "keep-me" }).uid, "keep-me")
+  assert.equal(Model.normalizeApplication({ desktopId: "a", uid: "no spaces" }).uid, "")
   assert.equal(Model.normalizeApplication({}), null)
   assert.equal(Model.normalizeApplication({ command: "   " }), null)
 })
@@ -1164,4 +1168,199 @@ test("every workspace dispatch is built from a validated reference", () => {
   assert.doesNotMatch(qml, /"workspace " \+ workspace/)
   assert.doesNotMatch(qml, /movetoworkspacesilent " \+ workspace/)
   assert.doesNotMatch(qml, /id\.replace\(/)
+})
+
+// -------------------------------------------------------------- pane layouts
+
+test("a pane tree fills the space it is given, without overlap or gaps", () => {
+  const tree = {
+    split: "row", ratio: 0.5,
+    children: [
+      { app: "p1" },
+      { split: "column", ratio: 0.25, children: [{ app: "p2" }, { app: "p3" }] }
+    ]
+  }
+  const { panes, dividers } = Model.paneRects(tree, 200, 100, 4)
+  assert.deepEqual(panes.map(p => p.path), ["0", "10", "11"])
+  // The divider is taken out of the split, so the parts still add up.
+  assert.equal(panes[0].width + 4 + panes[1].width, 200)
+  assert.equal(panes[1].height + 4 + panes[2].height, 100)
+  assert.equal(panes[1].y + panes[1].height + 4, panes[2].y)
+  // Every divider carries the extent of the split it belongs to, which is
+  // what a resize needs in order to turn a pointer position into a ratio.
+  const outer = dividers.find(d => d.path === "")
+  assert.deepEqual(
+    [outer.direction, outer.spanX, outer.spanWidth],
+    ["row", 0, 200])
+})
+
+test("a pane path names a node, and every edit returns a new tree", () => {
+  const one = Model.paneLeaf("a")
+  const two = Model.paneSplitAt(one, "", "row")
+  assert.equal(Model.paneAt(two, "0").app, "a")
+  assert.equal(Model.paneAt(two, "1").app, "")
+  assert.equal(one.app, "a", "the tree handed in is not mutated")
+
+  const filled = Model.paneSetAppAt(two, "1", "b")
+  assert.deepEqual(Model.paneApps(filled, []), ["a", "b"])
+  assert.equal(Model.paneFindApp(filled, "b", ""), "1")
+  assert.equal(Model.paneFindApp(filled, "nobody", ""), null)
+
+  // Removing a pane promotes its sibling rather than leaving a half split.
+  assert.deepEqual(Model.paneRemoveAt(filled, "0"), { app: "b" })
+
+  // A ratio outside what is drawable is clamped, not refused.
+  assert.equal(Model.paneSetRatioAt(filled, "", 9).ratio, 0.9)
+  assert.equal(Model.paneSetRatioAt(filled, "", -1).ratio, 0.1)
+  // A path that is not a split has no ratio to set.
+  assert.equal(Model.paneSetRatioAt(filled, "0", 0.3), filled)
+})
+
+test("panes are capped in count and in depth", () => {
+  let tree = Model.paneLeaf("")
+  for (let i = 0; i < 200; i++) {
+    const path = "1".repeat(Math.min(i, Model.MAX_SPLIT_DEPTH))
+    tree = Model.paneSplitAt(tree, path, "row")
+  }
+  assert.ok(Model.paneCount(tree) <= Model.MAX_PANES)
+
+  // Depth is capped too, so a config cannot recurse the renderer to death.
+  let deep = Model.paneLeaf("")
+  for (let i = 0; i < Model.MAX_SPLIT_DEPTH + 4; i++)
+    deep = Model.paneSplitAt(deep, "1".repeat(i), "row")
+  assert.equal(Model.paneAt(deep, "1".repeat(Model.MAX_SPLIT_DEPTH + 1)), null)
+})
+
+test("a mode without a stored layout gets one from the workspaces it names", () => {
+  const ctx = Model.normalizeMode({
+    id: "coding", name: "Coding",
+    applications: [
+      { desktopId: "term", workspace: 1 },
+      { desktopId: "editor", workspace: 1 },
+      { desktopId: "browser", workspace: 2 },
+      { command: "slack" }
+    ]
+  }, [])
+  assert.deepEqual(ctx.workspaces.layouts.map(l => l.workspace), ["1", "2", ""])
+  assert.deepEqual(Model.paneApps(ctx.workspaces.layouts[0].tree, []).length, 2)
+  // Nothing is left unplaced, so the canvas is the whole mode and not most of it.
+  const placed = ctx.workspaces.layouts
+    .reduce((n, l) => n + Model.paneApps(l.tree, []).length, 0)
+  assert.equal(placed, ctx.applications.length)
+})
+
+test("panes and applications cannot drift apart", () => {
+  const ctx = Model.normalizeMode({
+    id: "x", name: "X",
+    applications: [
+      { uid: "a", desktopId: "one", workspace: 5 },
+      { uid: "b", desktopId: "two", workspace: 5 }
+    ],
+    workspaces: {
+      layouts: [{
+        workspace: "3",
+        tree: {
+          split: "row", ratio: 0.5,
+          children: [
+            { app: "b" },
+            // A second mention of the same application, and one of something
+            // that does not exist. Both become empty panes.
+            { split: "column", ratio: 0.5, children: [{ app: "b" }, { app: "ghost" }] }
+          ]
+        }
+      }]
+    }
+  }, [])
+
+  const layout = ctx.workspaces.layouts.find(l => l.workspace === "3")
+  assert.deepEqual(Model.paneApps(layout.tree, []), ["b"])
+  // The pane wins over the workspace the application used to claim.
+  assert.equal(ctx.applications.find(a => a.uid === "b").workspace, 3)
+  // The one no pane claimed keeps its own workspace, in a layout of its own.
+  assert.equal(ctx.applications.find(a => a.uid === "a").workspace, 5)
+  assert.ok(ctx.workspaces.layouts.some(l => l.workspace === "5"))
+})
+
+test("the panes are the launch order", () => {
+  const ctx = Model.normalizeMode({
+    id: "x", name: "X",
+    applications: [
+      { uid: "a", desktopId: "last" },
+      { uid: "b", desktopId: "first" }
+    ],
+    workspaces: {
+      layouts: [{
+        workspace: "2",
+        tree: { split: "row", ratio: 0.5, children: [{ app: "b" }, { app: "a" }] }
+      }]
+    }
+  }, [])
+  const plan = Model.activationPlan(ctx, {}).filter(s => s.kind === "applications")
+  assert.deepEqual(plan.map(s => s.desktopId), ["first", "last"])
+  assert.deepEqual(plan.map(s => s.workspace), [2, 2])
+})
+
+test("a layout labelled with something that is not a workspace is dropped", () => {
+  const layouts = Model.normalizeLayouts([
+    { workspace: "1", tree: { app: "" } },
+    { workspace: "a; hyprctl dispatch exit", tree: { app: "" } },
+    { workspace: "1", tree: { app: "" } },
+    { workspace: "", tree: { app: "" } }
+  ])
+  // The injection attempt is gone, and the duplicate did not shadow the first.
+  assert.deepEqual(layouts.map(l => l.workspace), ["1", ""])
+})
+
+test("a uid is minted once per application and survives a round trip", () => {
+  const ctx = Model.normalizeMode({
+    id: "x", name: "X",
+    applications: [
+      { desktopId: "one" },
+      { uid: "dup", desktopId: "two" },
+      { uid: "dup", desktopId: "three" }
+    ]
+  }, [])
+  const uids = ctx.applications.map(a => a.uid)
+  assert.equal(new Set(uids).size, 3, "no two applications share a uid")
+  assert.ok(uids.every(u => /^[A-Za-z0-9_-]{1,24}$/.test(u)))
+
+  const config = Model.normalizeConfig({ modes: [ctx] }).config
+  const again = Model.parseConfig(Model.serializeConfig(config)).config
+  assert.deepEqual(again.modes[0].applications.map(a => a.uid), uids)
+  assert.deepEqual(again.modes[0].workspaces, ctx.workspaces)
+})
+
+test("normalizing an already normal mode changes nothing", () => {
+  const once = Model.normalizeMode({
+    id: "x", name: "X",
+    applications: [
+      { desktopId: "a", workspace: 1 },
+      { desktopId: "b", workspace: 1 },
+      { desktopId: "c", workspace: 2 },
+      { command: "htop" }
+    ]
+  }, [])
+  assert.deepEqual(Model.normalizeMode(once, []), once)
+  assert.deepEqual(Model.reconcileMode(once), once)
+})
+
+test("the number of workspaces a mode can carry is bounded", () => {
+  const applications = []
+  for (let i = 0; i < Model.MAX_LAYOUTS + 10; i++)
+    applications.push({ desktopId: "app" + i, workspace: i + 1 })
+  const ctx = Model.normalizeMode({ id: "x", name: "X", applications }, [])
+  assert.ok(ctx.workspaces.layouts.length <= Model.MAX_LAYOUTS)
+})
+
+test("the editor drives the canvas through the model, never around it", () => {
+  const qml = read("EditorWindow.qml")
+  // Every pane edit rebuilds the draft through reconcileMode, so the panes,
+  // the application list, and each application's workspace stay in step.
+  assert.match(qml, /function commitDraft\(next\) \{\s*root\.draft = Model\.reconcileMode\(next\)/)
+  const canvas = read("WorkspaceCanvas.qml")
+  // Drawing and hit testing read the same rectangles.
+  assert.match(canvas, /readonly property var rects: Model\.paneRects\(/)
+  assert.match(canvas, /function paneUnder\([\s\S]*?canvas\.rects\.panes/)
+  // A workspace reaches a dispatch only through the model's own validation.
+  assert.match(qml, /function renameWorkspace[\s\S]*?Model\.workspaceRef\(raw\)/)
 })
