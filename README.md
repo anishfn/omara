@@ -323,8 +323,6 @@ want is a pane you close.
 
 ### Icons
 
-![Choosing an icon](screenshots/icon-picker.png)
-
 The icon box next to the name, under **Options**, opens a searchable grid.
 Search by what you are doing (`code`, `game`, `focus`, `music`, `terminal`) or
 browse. **No icon** is always there.
