@@ -17,23 +17,33 @@ Item {
   property real iconSize: Style.font.icon
   property color color: Color.foreground
 
-  // Everything below is in a 100-unit square, scaled to iconSize on the way
-  // out, so the proportions hold whatever the bar's icon size is.
-  readonly property real u: iconSize / 100
+  // The canvas the bar allots, and the ink drawn inside it. A glyph does not
+  // fill its em box either: measured against the tray beside it, those icons
+  // put about eleven pixels of ink in a sixteen pixel canvas, and a mark drawn
+  // edge to edge sits among them looking a size too big.
+  readonly property real artSize: iconSize * 0.7
 
-  // Never thinner than a pixel and a half: a hairline outline beside the
-  // solid glyphs of the rest of the bar reads as a rendering fault.
-  readonly property real stroke: Math.max(1.5, 14 * u)
+  // Everything below is in a 100-unit square, scaled to artSize on the way
+  // out, so the proportions hold whatever the bar's icon size is.
+  readonly property real u: artSize / 100
+
+  // Never thinner than a pixel: a hairline outline beside the solid glyphs of
+  // the rest of the bar reads as a rendering fault.
+  readonly property real stroke: Math.max(1, 14 * u)
 
   implicitWidth: iconSize
   implicitHeight: iconSize
   width: implicitWidth
   height: implicitHeight
 
+  // The ink is centred in the canvas rather than anchored to its corner, so
+  // the mark sits on the same optical line as the glyphs either side of it.
+  readonly property real inset: (iconSize - artSize) / 2
+
   // The card in front, the mode you are in.
   Rectangle {
-    x: 3 * root.u
-    y: 42 * root.u
+    x: root.inset + 3 * root.u
+    y: root.inset + 42 * root.u
     width: 66 * root.u
     height: 54 * root.u
     radius: 9 * root.u
@@ -44,7 +54,10 @@ Item {
   // The card behind, drawn only where the front one does not cover it, and
   // stopping 6 units short at each end so the two never touch.
   Shape {
-    anchors.fill: parent
+    x: root.inset
+    y: root.inset
+    width: root.artSize
+    height: root.artSize
     antialiasing: true
     preferredRendererType: Shape.CurveRenderer
 
