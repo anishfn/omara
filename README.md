@@ -360,12 +360,21 @@ Each tab is one workspace. A pane is one application.
 | Swap two applications | Drag one pane onto the other |
 | Resize | Drag the divider between two panes |
 | Remove one | The × on the pane |
-| Reorder workspaces | Drag a tab left or right; the others move under it |
+| Reorder workspaces | Drag a tab left or right; the contents move, the numbers stay in place |
 
 Click the tab you are already on to rename it, and drag a tab to move it.
-Order is not decoration: the panes read in order and so does everything a mode
-opens, so moving a workspace moves it up or down the launch order too. A mode
-starts with one tab, workspace `1`; **+** adds the next free number. A tab named nothing at all
+
+Dragging moves what is *in* a workspace, not the number on it. Numbered tabs
+are positions: drag the second one to the front and the strip still reads
+`1 2 3`, but the applications that were on workspace 2 are now on workspace 1.
+A tab you have **named** is a label rather than a position, so it travels with
+its contents and keeps its name — `project` stays `project` wherever you put
+it, and the numbered tabs around it close up.
+
+Order is not decoration either way: the panes read in order and so does
+everything a mode opens, so moving a workspace moves it up or down the launch
+order too. A mode starts with one tab, workspace `1`; **+** adds the next free
+number. A tab named nothing at all
 reads *Any* and opens its applications wherever you happen to be — useful, but
 not where a mode begins, so an empty mode never sits on one.
 

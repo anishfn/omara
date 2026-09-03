@@ -278,16 +278,37 @@ Item {
     return next.workspaces.layouts.length - 1
   }
 
-  // Workspaces are reorderable because their order is not decoration: the
-  // panes read in order and so do the applications, so moving a tab moves the
-  // whole workspace up or down the launch order.
+  // Dragging a tab moves what is inside it, not the number on it. A numbered
+  // tab is a position: the strip still reads 1, 2, 3 across afterwards, and
+  // the applications that were on the second workspace are now on the first.
+  // Moving the number instead would leave you looking at a strip that reads
+  // 2, 1, 3 and wondering which of those is the one things open on.
+  //
+  // A tab the user named is a label rather than a position, so it travels
+  // with its contents and keeps its name. Model.renumberLayouts knows the
+  // difference; this only has to put the landing flag back afterwards,
+  // because the workspace it pointed at has very likely been renumbered.
   function moveWorkspace(from, to) {
     if (!draft) return
     var count = root.layouts.length
     if (from < 0 || from >= count || to < 0 || to >= count || from === to) return
+
     var next = Model.clone(draft)
     var moved = next.workspaces.layouts.splice(from, 1)[0]
     next.workspaces.layouts.splice(to, 0, moved)
+
+    var landing = -1
+    var target = next.workspaces.target
+    if (target !== null && target !== undefined) {
+      for (var i = 0; i < next.workspaces.layouts.length; i++) {
+        if (String(next.workspaces.layouts[i].workspace) === String(target)) { landing = i; break }
+      }
+    }
+
+    next.workspaces.layouts = Model.renumberLayouts(next.workspaces.layouts)
+    if (landing >= 0)
+      next.workspaces.target = Model.asWorkspace(next.workspaces.layouts[landing].workspace)
+
     commitDraft(next)
   }
 

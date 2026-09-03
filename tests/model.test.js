@@ -1400,3 +1400,41 @@ test("the editor drives the canvas through the model, never around it", () => {
   // A workspace reaches a dispatch only through the model's own validation.
   assert.match(qml, /function renameWorkspace[\s\S]*?Model\.workspaceRef\(raw\)/)
 })
+
+test("a numbered workspace tab is a position, not a label", () => {
+  const strip = ws => ws.map((w) => ({ workspace: String(w), tree: Model.paneLeaf("") }))
+
+  // Drag the second tab to the front: the strip still counts up from one.
+  assert.deepEqual(
+    Model.renumberLayouts(strip([2, 1, 3])).map((l) => l.workspace),
+    ["1", "2", "3"])
+
+  // A name is a label and travels with its tab; it never takes a number, and
+  // the numbered tabs around it close up rather than counting past it.
+  assert.deepEqual(
+    Model.renumberLayouts(strip([2, "project", 1])).map((l) => l.workspace),
+    ["1", "project", "2"])
+
+  // Everything that is not plain digits is a name: the blank "anywhere" tab,
+  // a special, a relative step, a Hyprland workspace name.
+  assert.deepEqual(
+    Model.renumberLayouts(strip(["special:magic", 5, "+1", 2, "", "name:Deep Work"]))
+      .map((l) => l.workspace),
+    ["special:magic", "1", "+1", "2", "", "name:Deep Work"])
+
+  assert.deepEqual(Model.renumberLayouts([]), [])
+  // The input is not mutated; the editor clones a draft around this.
+  const before = strip([3, 1])
+  Model.renumberLayouts(before)
+  assert.deepEqual(before.map((l) => l.workspace), ["3", "1"])
+})
+
+test("moving a workspace moves what is in it, not the number on it", () => {
+  const qml = read("EditorWindow.qml")
+  // The drag must renumber, or the strip reads 2, 1, 3 afterwards and no
+  // number on screen says which workspace anything opens on any more.
+  assert.match(qml, /function moveWorkspace[\s\S]*?Model\.renumberLayouts\(/)
+  // And it must put the landing flag back, because the workspace it pointed
+  // at has almost certainly just been renumbered underneath it.
+  assert.match(qml, /function moveWorkspace[\s\S]*?workspaces\.target = Model\.asWorkspace\(/)
+})

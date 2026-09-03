@@ -427,6 +427,25 @@ function normalizeLayouts(raw) {
   return out
 }
 
+// A numbered tab is a position, not a label. Drag the second workspace to the
+// front and the strip still reads 1, 2, 3 across — what moved is everything
+// inside it, which is the thing you were dragging. A tab the user named keeps
+// that name wherever it lands, because a name is a label and does travel.
+//
+// Only plain digits count as positional. `project`, `name:Deep Work`,
+// `special:magic`, a relative step, and the blank "anywhere" tab are all names
+// and are left exactly as they are.
+function renumberLayouts(layouts) {
+  var out = Array.isArray(layouts) ? clone(layouts) : []
+  var position = 0
+  for (var i = 0; i < out.length; i++) {
+    if (!/^\d+$/.test(String(out[i].workspace))) continue
+    position++
+    out[i].workspace = String(position)
+  }
+  return out
+}
+
 function paneUid(taken) {
   var n = 1
   while (taken["p" + n]) n++
@@ -1547,6 +1566,7 @@ if (typeof module !== "undefined" && module.exports) {
     paneRemoveApp: paneRemoveApp,
     paneRects: paneRects,
     normalizeLayouts: normalizeLayouts,
+    renumberLayouts: renumberLayouts,
     freshApplicationUid: freshApplicationUid,
     reconcileLayouts: reconcileLayouts,
     reconcileMode: reconcileMode,
