@@ -28,13 +28,34 @@ Item {
   }
 
   PanelWindow {
+    id: switchWindow
     visible: root.opened
     anchors { top: true; bottom: true; left: true; right: true }
     color: "transparent"
     exclusionMode: ExclusionMode.Ignore
     WlrLayershell.namespace: "omara-switch"
     WlrLayershell.layer: WlrLayer.Overlay
-    WlrLayershell.keyboardFocus: WlrKeyboardFocus.Exclusive
+
+    // Primed then released, for the reason the editor is: a surface holding
+    // the keyboard exclusively is delivered typing meant for whatever you are
+    // actually looking at, and this one asks a question with a destructive
+    // answer on it.
+    property bool focusPrimed: false
+    WlrLayershell.keyboardFocus: visible
+      ? (focusPrimed ? WlrKeyboardFocus.OnDemand : WlrKeyboardFocus.Exclusive)
+      : WlrKeyboardFocus.None
+
+    onVisibleChanged: {
+      switchWindow.focusPrimed = false
+      if (visible) focusPrime.restart()
+      else focusPrime.stop()
+    }
+
+    Timer {
+      id: focusPrime
+      interval: 75
+      onTriggered: if (switchWindow.visible) switchWindow.focusPrimed = true
+    }
 
     PromptDialog {
       id: prompt

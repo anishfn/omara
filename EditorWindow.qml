@@ -760,13 +760,42 @@ Item {
   // ------------------------------------------------------------------ window
 
   PanelWindow {
+    id: editorWindow
     visible: root.opened && !root.suspended
     anchors { top: true; bottom: true; left: true; right: true }
     color: "transparent"
     exclusionMode: ExclusionMode.Ignore
     WlrLayershell.namespace: "omara-editor"
     WlrLayershell.layer: WlrLayer.Overlay
-    WlrLayershell.keyboardFocus: WlrKeyboardFocus.Exclusive
+
+    // Exclusive for long enough to take the keyboard, then OnDemand.
+    //
+    // Held exclusively, this surface receives every key on the system for as
+    // long as it is open: a panel left up while you work in a terminal is
+    // delivered your typing, and Enter or Space on a focused button is enough
+    // to create, capture or delete a mode you never touched. OnDemand hands
+    // the keyboard back the moment another window is focused, and the prime
+    // is what still gets focus at map time so Escape and Ctrl+S work the
+    // instant it opens, without a click. Same shape the shell's own
+    // KeyboardPanel uses.
+    property bool focusPrimed: false
+    WlrLayershell.keyboardFocus: visible
+      ? (focusPrimed ? WlrKeyboardFocus.OnDemand : WlrKeyboardFocus.Exclusive)
+      : WlrKeyboardFocus.None
+
+    onVisibleChanged: {
+      editorWindow.focusPrimed = false
+      if (visible) focusPrime.restart()
+      else focusPrime.stop()
+    }
+
+    Timer {
+      id: focusPrime
+      // Long enough for the commit cycles that map the surface, short enough
+      // that the exclusive window is not something you could type into.
+      interval: 75
+      onTriggered: if (editorWindow.visible) editorWindow.focusPrimed = true
+    }
 
     Rectangle {
       anchors.fill: parent
