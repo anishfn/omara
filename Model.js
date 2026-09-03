@@ -500,8 +500,14 @@ function reconcileLayouts(applications, layouts) {
     placed["u:" + apps[i].uid] = true
   }
 
-  // A mode with nothing in it still needs somewhere to drop the first thing.
-  if (out.length === 0) out.push({ workspace: "", tree: paneLeaf("") })
+  // A mode with nothing in it still needs somewhere to drop the first thing,
+  // and that somewhere is workspace 1. "Anywhere" is a real answer — it is
+  // what an application with no workspace of its own gets, and it is kept the
+  // moment anything is in it — but it is a poor first one: an empty tab
+  // labelled "anywhere" says nothing that an empty mode did not already say.
+  if (out.length === 0) out.push({ workspace: "1", tree: paneLeaf("") })
+  else if (apps.length === 0 && out.length === 1 && out[0].workspace === "")
+    out[0].workspace = "1"
 
   // Pass three: the layout an application ended up in is its workspace, and
   // the order the panes read in is the order it launches in.

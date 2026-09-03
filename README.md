@@ -225,8 +225,8 @@ Those three are the only paths Omara writes.
 3. **Lay out your workspaces.** Under *Workspaces*, drag apps from the list on
    the left onto the canvas on the right. Each tab is a workspace: terminal on
    1, browser on 2, chat on 3. Drop an app on the edge of a pane to split it.
-4. **Set where you land.** **Land here** on whichever tab you want the mode to
-   leave you on.
+4. **Set where you land.** Press the flag on whichever tab you want the mode
+   to leave you on.
 5. **Set the mood.** Under *Environment*: Do Not Disturb, audio output,
    wallpaper, and **Theme**, each picked from a list rather than typed.
 6. **Save**, then click the mode in the bar popup. If windows are already
@@ -345,16 +345,21 @@ Each tab is one workspace. A pane is one application.
 
 | To | Do |
 |---|---|
-| Add an application | Drag it in from the left, or click it to fill the selected pane |
+| Add an application | Drag it in from the left, click an empty pane, or click it in the list to fill the selected pane |
 | Split a pane | Drop an application on the pane's edge, or use the split buttons on it |
 | Move an application | Drag its pane onto another pane, or onto another workspace's tab |
 | Swap two applications | Drag one pane onto the other |
 | Resize | Drag the divider between two panes |
 | Remove one | The × on the pane |
 
-The **Workspace** field under the tabs is what that tab actually opens on.
-Blank means "wherever I am". **Land here** marks the workspace the mode leaves
-you on once everything is up; the tab carries a dot to show which one that is.
+Click the tab you are already on to rename it. A mode starts with one tab,
+workspace `1`; **+** adds the next free number. A tab named nothing at all
+reads *Any* and opens its applications wherever you happen to be — useful, but
+not where a mode begins, so an empty mode never sits on one.
+
+The flag marks the workspace the mode leaves you on once everything is up; the
+tab carries a dot to show which one that is. The bin removes the tab and
+everything on it.
 
 What the canvas controls is *which workspace* each application opens on and
 *what order* they open in — panes read left to right, top to bottom, and that
@@ -384,7 +389,7 @@ So a Coding mode might be:
 |---|---|
 | Workspace `1` | Ghostty |
 | Workspace `2` | Firefox │ Slack |
-| Land here | `1` |
+| Lands on | `1` |
 
 Two workspaces populated, and you start on the terminal.
 
