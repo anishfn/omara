@@ -1,23 +1,45 @@
 # Known bugs
 
 Found while reworking the editor. Each one is a separate commit's worth of
-work; none of them is fixed yet. Roughly ordered by how much damage it can do.
+work. Roughly ordered by how much damage it can do; #0 is partly addressed and
+says what measurement showed, the rest are untouched.
 
 ---
 
-### 0. The editor holds an exclusive keyboard grab for as long as it is open
+### 0. An open overlay collects keystrokes meant for other windows
 
-`EditorWindow.qml` — `WlrKeyboardFocus.Exclusive`
+`EditorWindow.qml`, `SwitchDialog.qml` — `WlrLayershell.keyboardFocus`
 
-The overlay takes every key on the system while it is up, so anything typed
-anywhere else — a terminal, an editor, a browser — is delivered to whichever
-control here happens to have focus. Enter and Space activate a focused button,
-which is enough to create, capture, or delete a mode from typing that was never
-aimed at this panel. Observed: a session left with the panel open picked up
-three unrelated actions from ordinary typing.
+A panel left open while you work elsewhere is delivered your typing, and
+Enter, Space or Ctrl+N on it is enough to create or delete a mode you never
+touched. Observed three times: a mode created beside an identical one, and on
+another occasion every mode in the config gone.
 
-Exclusive focus is right while you are *using* the panel; what is missing is
-giving it up when you are not. Fix: drop to `OnDemand`, or close on focus loss.
+**Partly addressed, and the documented fix did not work.** Both overlays now
+prime with `Exclusive` and settle on `OnDemand`, matching the shell's own
+`KeyboardPanel`. That is strictly more correct — `Exclusive` also routes every
+*pointer* event compositor-wide — but it does not fix this. Measured, with the
+prime confirmed firing and the surface confirmed on `OnDemand`: focus another
+window with `hyprctl dispatch focuswindow`, press Escape, and the editor still
+closes. The keys still reach it.
+
+The reason looks structural rather than a wrong flag. This is a full-screen
+overlay on `WlrLayer.Overlay` holding a dismissal scrim, so there is no way to
+click another window without dismissing it, and Hyprland does not appear to
+move keyboard focus off a layer surface for a window-focus dispatch. `OnDemand`
+buys what it can; the surface still owns the keyboard because nothing can take
+it away without closing the panel.
+
+What would actually fix it is unresolved. Candidates: close on focus loss, if
+Quickshell surfaces such a signal for a layer shell; drop the full-screen scrim
+so the panel is only as big as its card and other windows stay clickable; or
+require a pointer interaction before a keyboard shortcut may create or delete
+anything. Each is a design change, not a flag.
+
+Until then the practical mitigation is to not leave the panel open — which is
+worth saying plainly, because every observed instance came from the panel being
+opened programmatically while someone was using the machine, not from ordinary
+use.
 
 ---
 

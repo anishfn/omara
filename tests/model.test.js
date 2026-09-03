@@ -1496,3 +1496,24 @@ test("no QML object sets the same property twice", () => {
     assert.deepEqual(duplicates(read(file)), [], `${file} sets a property twice`)
   }
 })
+
+test("no overlay keeps the keyboard once it has focus", () => {
+  // A layer surface held at Exclusive receives every key on the system for as
+  // long as it is up, so typing meant for a terminal is delivered to whichever
+  // control here has focus — and Enter or Space on a focused button is enough
+  // to create, capture or delete a mode. Observed three times.
+  //
+  // Both overlays prime with Exclusive so they still take focus at map time,
+  // then settle on OnDemand, which releases the keyboard when another window
+  // is focused. The shape is the shell's own KeyboardPanel.
+  for (const file of ["EditorWindow.qml", "SwitchDialog.qml"]) {
+    const qml = read(file)
+    assert.match(qml, /focusPrimed \? WlrKeyboardFocus\.OnDemand : WlrKeyboardFocus\.Exclusive/,
+      `${file} must release the keyboard after priming`)
+    assert.match(qml, /onTriggered: if \(\w+\.visible\) \w+\.focusPrimed = true/,
+      `${file} must actually run the prime timer`)
+    // Nothing may pin it open-endedly.
+    assert.doesNotMatch(qml, /keyboardFocus: WlrKeyboardFocus\.Exclusive/,
+      `${file} must not hold Exclusive unconditionally`)
+  }
+})
