@@ -323,7 +323,10 @@ want is a pane you close.
 
 ### Icons
 
-The icon box next to the name, under **Options**, opens a searchable grid.
+Click the chip of the mode you already have open — its icon, or the empty slot
+where one would go — and the picker opens without leaving the canvas. The same
+box sits next to the name under **Options**.
+
 Search by what you are doing (`code`, `game`, `focus`, `music`, `terminal`) or
 browse. **No icon** is always there.
 
@@ -357,9 +360,12 @@ Each tab is one workspace. A pane is one application.
 | Swap two applications | Drag one pane onto the other |
 | Resize | Drag the divider between two panes |
 | Remove one | The × on the pane |
+| Reorder workspaces | Drag a tab left or right; the others move under it |
 
-Click the tab you are already on to rename it. A mode starts with one tab,
-workspace `1`; **+** adds the next free number. A tab named nothing at all
+Click the tab you are already on to rename it, and drag a tab to move it.
+Order is not decoration: the panes read in order and so does everything a mode
+opens, so moving a workspace moves it up or down the launch order too. A mode
+starts with one tab, workspace `1`; **+** adds the next free number. A tab named nothing at all
 reads *Any* and opens its applications wherever you happen to be — useful, but
 not where a mode begins, so an empty mode never sits on one.
 

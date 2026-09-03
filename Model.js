@@ -1415,6 +1415,7 @@ var Glyph = {
   splitVertical: "\u{f0bcc}",
   splitHorizontal: "\u{f0bcb}",
   landing: "\u{f023b}",
+  iconSlot: "\u{f0704}",
   settings: "\u{f0493}",
   capture: "\u{f0100}",
   blank: "\u{f0224}",

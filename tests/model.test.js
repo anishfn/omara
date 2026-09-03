@@ -961,7 +961,9 @@ test("no route out of a half-finished edit skips the unsaved guard", () => {
   // The scrim, Escape, the close button and the sidebar all go through them.
   assert.doesNotMatch(qml, /onClicked: root\.close\(\)/)
   assert.match(qml, /onClicked: root\.requestClose\(\)/)
-  assert.match(qml, /onClicked: root\.requestSelect\(modelData\.id\)/)
+  // The chip's click branches now — the mode already open opens its icon
+  // picker instead — so pin the guarded route, not the shape of the handler.
+  assert.match(qml, /root\.requestSelect\(modelData\.id\)/)
   // A field still under the caret has uncommitted text; guard() takes focus
   // back first so those changes are seen.
   const guard = qml.slice(qml.indexOf("function guard("))
