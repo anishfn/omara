@@ -278,6 +278,19 @@ Item {
     return next.workspaces.layouts.length - 1
   }
 
+  // Workspaces are reorderable because their order is not decoration: the
+  // panes read in order and so do the applications, so moving a tab moves the
+  // whole workspace up or down the launch order.
+  function moveWorkspace(from, to) {
+    if (!draft) return
+    var count = root.layouts.length
+    if (from < 0 || from >= count || to < 0 || to >= count || from === to) return
+    var next = Model.clone(draft)
+    var moved = next.workspaces.layouts.splice(from, 1)[0]
+    next.workspaces.layouts.splice(to, 0, moved)
+    commitDraft(next)
+  }
+
   // The applications in a removed workspace go with it. Leaving them behind
   // would only put the tab back, since an application with a workspace and no
   // pane is given one on the next reconcile.
@@ -850,7 +863,11 @@ Item {
                     required property var modelData
 
                     text: modelData.name
-                    iconText: modelData.icon ? String(modelData.icon) : ""
+                    // A mode with no icon still shows the slot, so the way to
+                    // give it one is on the chip rather than only behind
+                    // Options — and so selecting a chip does not change its
+                    // width by suddenly finding room for an icon.
+                    iconText: modelData.icon ? String(modelData.icon) : Model.Glyph.iconSlot
                     bordered: true
                     focusable: true
                     selected: root.selectedId === modelData.id
@@ -862,9 +879,18 @@ Item {
                     // mode with one, and a row of chips that changes height
                     // per mode reads as a row of chips that are cut off.
                     height: newMode.implicitHeight
-                    tooltipText: modelData.description || ""
+                    tooltipText: root.selectedId === modelData.id
+                      ? "Click again to choose an icon"
+                      : (modelData.description || "")
                     Accessible.name: "Edit the mode " + modelData.name
-                    onClicked: root.requestSelect(modelData.id)
+                    // Selecting a different mode is a route out of a
+                    // half-finished edit and goes through the guard. Clicking
+                    // the one already open is not going anywhere, so it does
+                    // the next most useful thing instead.
+                    onClicked: {
+                      if (root.selectedId === modelData.id) root.openIconPicker()
+                      else root.requestSelect(modelData.id)
+                    }
                   }
                 }
               }

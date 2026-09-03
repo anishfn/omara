@@ -36,6 +36,18 @@ Item {
   // you click the one you are already on, and a field after that.
   property int renaming: -1
 
+  // The tab currently being dragged to a new position, or -1. It tracks the
+  // slot the tab is in rather than the one it started in, because the tabs
+  // swap under the pointer as it crosses them.
+  property int reordering: -1
+
+  // The counted tab Repeater indexes this rather than holding the array, so a
+  // reorder cannot destroy the delegate mid-drag.
+  function layoutAt(i) {
+    var list = canvas.layouts
+    return (i >= 0 && i < list.length) ? list[i] : { workspace: "", tree: Model.paneLeaf("") }
+  }
+
   // The space between panes is space. Wide enough to read as a gap rather
   // than a seam, and nothing is drawn in it until you reach for it.
   readonly property int gap: Style.space(8)
@@ -74,6 +86,7 @@ Item {
   onLayoutsChanged: {
     if (tab >= layouts.length) tab = Math.max(0, layouts.length - 1)
     if (renaming >= layouts.length) renaming = -1
+    if (reordering >= layouts.length) reordering = -1
     if (Model.paneAt(canvas.tree, canvas.selectedPath) === null) canvas.selectedPath = ""
   }
 
@@ -90,6 +103,7 @@ Item {
   onModeIdChanged: {
     canvas.tab = 0
     canvas.renaming = -1
+    canvas.reordering = -1
     canvas.selectedPath = ""
     canvas.dragCancel()
   }
@@ -240,14 +254,22 @@ Item {
 
       Repeater {
         id: tabRepeater
-        model: canvas.layouts
+        // Counted, not iterated. Reordering hands back a fresh array, and a
+        // Repeater modelled on the array would rebuild every delegate — taking
+        // the mouse grab of the tab being dragged with it, one tab into the
+        // drag. Counting keeps them alive; only adding or removing a workspace
+        // changes the count.
+        model: canvas.layouts.length
 
         Item {
-          required property var modelData
+          id: cell
           required property int index
 
+          readonly property var modelData: canvas.layoutAt(index)
           readonly property bool editing: canvas.renaming === index
           readonly property bool isLanding: canvas.landing !== "" && canvas.landing === modelData.workspace
+
+          opacity: canvas.reordering === index ? 0.65 : 1
 
           // Wide enough to read, narrow enough that one workspace does not
           // look like a title bar. They share the leftover room between them
@@ -266,18 +288,15 @@ Item {
             selected: canvas.tab === index
             foreground: canvas.foreground
             fontFamily: canvas.fontFamily
+            hasCursor: tabMouse.containsMouse
             tooltipText: modelData.workspace === ""
-              ? "Opens wherever you happen to be" : "Click again to rename"
+              ? "Opens wherever you happen to be  ·  drag to reorder"
+              : "Click again to rename  ·  drag to reorder"
             Accessible.name: modelData.workspace === "" ? "Any workspace" : "Workspace " + modelData.workspace
-            onClicked: {
-              if (canvas.tab === index) { canvas.renaming = index; return }
-              canvas.tab = index
-              canvas.selectedPath = ""
-              canvas.renaming = -1
-            }
+            Accessible.onPressAction: canvas.tab = cell.index
 
             Rectangle {
-              visible: parent.parent.isLanding
+              visible: cell.isLanding
               width: Style.space(5)
               height: width
               radius: width / 2
@@ -288,10 +307,73 @@ Item {
             }
           }
 
+          // Above the button, below the field. The button is chrome now; every
+          // gesture a tab answers to is here, because a click and the start of
+          // a drag are the same event until the pointer has moved.
+          MouseArea {
+            id: tabMouse
+            anchors.fill: parent
+            enabled: !cell.editing
+            hoverEnabled: true
+            cursorShape: Qt.PointingHandCursor
+            preventStealing: true
+
+            property real pressX: 0
+            property bool armed: false
+            property bool moving: false
+
+            onPressed: function(mouse) {
+              tabMouse.pressX = mouse.x
+              tabMouse.armed = true
+              tabMouse.moving = false
+            }
+
+            onPositionChanged: function(mouse) {
+              if (!tabMouse.armed) return
+              if (!tabMouse.moving) {
+                if (Math.abs(mouse.x - tabMouse.pressX) < Style.space(8)) return
+                tabMouse.moving = true
+                canvas.renaming = -1
+                canvas.tab = cell.index
+                canvas.reordering = cell.index
+              }
+              // Swap as the pointer crosses a neighbour rather than on release:
+              // the tabs moving under the pointer is the only feedback needed.
+              var at = canvas.mapFromItem(tabMouse, mouse.x, mouse.y)
+              var over = canvas.tabUnder(at.x, at.y)
+              if (over >= 0 && over !== canvas.reordering) {
+                canvas.editor.moveWorkspace(canvas.reordering, over)
+                canvas.reordering = over
+                canvas.tab = over
+              }
+            }
+
+            onReleased: {
+              if (tabMouse.armed && !tabMouse.moving) {
+                if (canvas.tab === cell.index) {
+                  canvas.renaming = cell.index
+                } else {
+                  canvas.tab = cell.index
+                  canvas.selectedPath = ""
+                  canvas.renaming = -1
+                }
+              }
+              tabMouse.armed = false
+              tabMouse.moving = false
+              canvas.reordering = -1
+            }
+
+            onCanceled: {
+              tabMouse.armed = false
+              tabMouse.moving = false
+              canvas.reordering = -1
+            }
+          }
+
           TextField {
             id: tabField
             anchors.fill: parent
-            visible: parent.editing
+            visible: cell.editing
             horizontalAlignment: TextInput.AlignHCenter
             placeholderText: "blank = anywhere"
             foreground: canvas.foreground
@@ -829,8 +911,9 @@ Item {
       textFormat: Text.PlainText
       // The first clause is the one a new mode needs: the tabs are not a
       // toolbar, they are the workspaces this mode opens on.
-      text: "Each tab is a workspace  ·  drag an app in from the left  ·  "
-        + "drop one on a pane's edge to split it  ·  drag a divider to resize"
+      text: "Each tab is a workspace, drag one to reorder  ·  drag an app in "
+        + "from the left  ·  drop one on a pane's edge to split it  ·  "
+        + "drag a divider to resize"
       color: canvas.dim
       font.family: canvas.fontFamily
       font.pixelSize: Style.font.caption
