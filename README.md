@@ -383,16 +383,16 @@ that is the whole answer, so it stays an icon and a name. A pane holding a
 **Custom command** still has its command box, because there the command is the
 application.
 
-**If the command fails, the terminal stays open.** It prints the exit code and
-drops you into a shell in that window, so you can read the error. Without that,
-`cd ~/config && code .` — one missing dot — closes instantly and looks exactly
-like a broken plugin, while the activity log still says the launch succeeded,
-because it did. A command that succeeds is untouched: when it ends, the window
-closes.
+**The terminal stays open when the command is done**, whichever way it went,
+and you close it — `Ctrl+D`, or `exit`. (`Ctrl+C` interrupts what is running;
+it does not close the shell.) If the command failed it prints the exit code
+first, so you can read the error. Without that, `cd ~/config && code .` — one
+missing dot — closed instantly and looked exactly like a broken plugin, while
+the activity log still said the launch succeeded, because it did.
 
-Stored as `args: "-e bash -lc '<your line> || { ... }'"`, with the whole thing
+Stored as `args: "-e bash -lc '<your line>; ... exec bash'"`, with the whole thing
 as a single quoted argument, so nothing in it is read as syntax by anything but
-the shell you meant it for. The `|| { ... }` is the keep-open wrapper and is
+the shell you meant it for. The tail after your line is the keep-open wrapper and is
 ours, not yours: the box always shows back exactly what you typed. Flags that
 came before the command are kept, so a terminal captured as
 `--title notes -e btop` keeps its title.

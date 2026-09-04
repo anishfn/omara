@@ -262,16 +262,24 @@ var TERMINAL_SHELL = "bash"
 var TERMINAL_SHELL_FLAG = "-lc"
 var SHELL_NAMES = ["bash", "sh", "zsh", "dash", "fish"]
 
-// A command that fails takes its terminal down with it before you can read
-// why, and the activity log still says the launch succeeded — because it did.
-// A typo and a real fault look identical from the outside, so a non-zero exit
-// keeps the window and drops you into a shell in it. Success is untouched:
-// the command ends, the window closes.
+// The terminal stays open when the command is done, whichever way it went, and
+// you close it yourself. A command that fails would otherwise take its window
+// down with it before you can read why, and the activity log would still say
+// the launch succeeded — because it did. A typo and a real fault looked
+// identical from the outside.
 //
 // `__c=$?` has to come first. The next command in the block would otherwise
-// have already reset `$?` to its own status by the time it is read.
+// have already reset `$?` to its own status by the time it is read. Nothing is
+// printed when the command succeeded: an exit line saying 0 is noise.
 var TERMINAL_KEEP_OPEN =
+  '; __c=$?; if [ "$__c" -ne 0 ]; then echo; echo "[command exited $__c]"; fi; exec bash'
+
+// Every wrapper this has ever written, newest first, so a mode saved by an
+// older version still shows its command back rather than our plumbing.
+var TERMINAL_KEEP_OPEN_ALL = [
+  TERMINAL_KEEP_OPEN,
   ' || { __c=$?; echo; echo "[command exited $__c]"; exec bash; }'
+]
 
 // Appended on the way in and taken off on the way out, so what you typed is
 // what you see. A line written by hand, without it, reads back unchanged.
@@ -281,9 +289,11 @@ function withKeepOpen(command) {
 
 function withoutKeepOpen(command) {
   var line = String(command === undefined || command === null ? "" : command)
-  var tail = TERMINAL_KEEP_OPEN
-  if (line.length > tail.length && line.slice(-tail.length) === tail)
-    return line.slice(0, line.length - tail.length)
+  for (var i = 0; i < TERMINAL_KEEP_OPEN_ALL.length; i++) {
+    var tail = TERMINAL_KEEP_OPEN_ALL[i]
+    if (line.length > tail.length && line.slice(-tail.length) === tail)
+      return line.slice(0, line.length - tail.length)
+  }
   return line
 }
 

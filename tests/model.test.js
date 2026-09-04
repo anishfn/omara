@@ -1237,18 +1237,27 @@ test("a terminal is asked what to run, not what flag to pass", () => {
     assert.ok(argv[3].startsWith(line), "the line runs first, as written")
   }
 
-  // A command that fails keeps its window, or a typo is indistinguishable
-  // from a bug: the terminal vanishes and the log still says it launched.
-  const failing = Model.setTerminalCommand("", "cd ~/config && code .")
-  const script = Model.parseArgv(failing).argv[3]
-  assert.match(script, /\|\| \{ __c=\$\?;/)
-  assert.match(script, /exec bash; \}$/)
-  // $? has to be read before anything else in the block resets it.
+  // The window stays when the command is done, whichever way it went, and you
+  // close it. Otherwise a failure takes the window down before you can read
+  // why, while the log still says the launch succeeded — because it did.
+  const wrapped = Model.setTerminalCommand("", "cd ~/config && code .")
+  const script = Model.parseArgv(wrapped).argv[3]
+  assert.ok(script.startsWith("cd ~/config && code .;"), script)
+  assert.match(script, /exec bash$/)
+  // Silent when it worked: an exit line saying 0 is noise.
+  assert.match(script, /if \[ "\$__c" -ne 0 \]; then/)
+  // $? has to be read before anything else resets it.
   assert.ok(script.indexOf("__c=$?") < script.indexOf("echo"),
     "the exit code must be captured before the first echo")
+
   // The wrapper is ours, not yours: you see back exactly what you typed.
-  assert.equal(Model.terminalCommandOf(failing), "cd ~/config && code .")
-  // A line written by hand, without the wrapper, still reads back unchanged.
+  assert.equal(Model.terminalCommandOf(wrapped), "cd ~/config && code .")
+  // Including one written by a previous version, so an existing mode does not
+  // suddenly show its own plumbing in the box.
+  assert.equal(Model.terminalCommandOf(
+    `-e bash -lc 'cd x && y || { __c=$?; echo; echo "[command exited $__c]"; exec bash; }'`),
+    "cd x && y")
+  // A line written by hand, without any wrapper, still reads back unchanged.
   assert.equal(Model.terminalCommandOf("-e bash -lc 'just this'"), "just this")
 
   // Flags that came before the command are not the command, and survive.
