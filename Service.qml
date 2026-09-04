@@ -1574,10 +1574,31 @@ Item {
   // asked about have to be the pids answered for, and a window that closes in
   // between would otherwise be captured with another process's command line.
   function captureCurrentSetup(name) {
-    if (captureProcess.running) return false
+    if (captureProcess.running || captureRefresh.running) return false
     service.captureName = String(name || "")
-    service.captureWindows = openWindows()
     service.captureSettled = false
+    // A window opened since the last event Quickshell happened to see carries
+    // an empty lastIpcObject, and a window with no class is one openWindows
+    // skips — so the terminal you opened a moment ago, which is very likely
+    // the reason you are capturing at all, was the one thing left out. Ask
+    // Hyprland for a fresh client list and read it on the next tick.
+    Hyprland.refreshToplevels()
+    captureRefresh.restart()
+    return true
+  }
+
+  // Short, and not a guess at how long the refresh takes: if it has not landed
+  // the capture is merely as complete as it always used to be, and capture is
+  // already waiting on a subprocess after this.
+  Timer {
+    id: captureRefresh
+    interval: 200
+    repeat: false
+    onTriggered: service.beginCaptureProbe()
+  }
+
+  function beginCaptureProbe() {
+    service.captureWindows = openWindows()
 
     var pids = []
     for (var i = 0; i < service.captureWindows.length && pids.length < captureMaxProcesses; i++) {
@@ -1589,7 +1610,6 @@ Item {
       [binBash, "-lc", captureScript, "bash"].concat(pids))
     captureProcess.running = true
     captureWatchdog.restart()
-    return true
   }
 
   property bool captureSettled: false

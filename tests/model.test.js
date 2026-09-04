@@ -1164,6 +1164,21 @@ test("arguments and a folder are the reason to bypass gtk-launch, not to skip it
   assert.match(body, /extra\.unterminated/)
 })
 
+test("capture asks Hyprland what is open before deciding what is open", () => {
+  const qml = read("Service.qml")
+  const body = fnBody(qml, "function captureCurrentSetup(name)")
+  // A window opened since the last event Quickshell saw has an empty
+  // lastIpcObject, and openWindows drops a window with no class. Without this
+  // the terminal you just opened is the one thing a capture leaves out.
+  assert.match(body, /Hyprland\.refreshToplevels\(\)/)
+  assert.match(body, /captureRefresh\.restart\(\)/)
+  // The window list is read after the refresh, not before it.
+  assert.doesNotMatch(body, /openWindows\(\)/)
+  assert.match(fnBody(qml, "function beginCaptureProbe()"), /service\.captureWindows = openWindows\(\)/)
+  // And a second capture cannot start while the first is still waiting.
+  assert.match(body, /captureProcess\.running \|\| captureRefresh\.running/)
+})
+
 test("modes written under the old name are adopted once, and never resurrected", () => {
   const qml = read("Service.qml")
   assert.match(qml, /legacyConfigPath: home \+ "\/\.config\/omarchy\/omara\.json"/)
