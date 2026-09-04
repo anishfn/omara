@@ -242,31 +242,66 @@ var TERMINAL_EXEC_RE = /(^|\s)(-e|-x|--command|--execute)(?=\s|$)/
 
 // A .desktop file declaring itself a terminal is the freedesktop-standard
 // signal, and a far better one than guessing from the application's name.
+//
+// Length-indexed rather than Array.isArray: QML hands a `list<QString>` over
+// as something array-like that is not a JS Array, so the tidier guard said no
+// to every real desktop entry while every test passed on plain arrays.
 function isTerminalCategories(categories) {
-  var list = Array.isArray(categories) ? categories : []
-  for (var i = 0; i < list.length; i++)
-    if (String(list[i]).trim().toLowerCase() === "terminalemulator") return true
+  if (!categories) return false
+  var n = Number(categories.length)
+  if (!isFinite(n) || n <= 0) return false
+  for (var i = 0; i < n; i++)
+    if (String(categories[i]).trim().toLowerCase() === "terminalemulator") return true
   return false
 }
 
-// The raw tail, not a re-joined token list: re-quoting what someone typed is
-// how `-c "cd x && y"` turns into something that no longer runs.
+// What a terminal is handed to run a whole shell line, rather than one
+// program: `-e bash -lc "<line>"`. A login shell because the line is yours and
+// expects your PATH, the same way the activate/deactivate hooks do.
+var TERMINAL_SHELL = "bash"
+var TERMINAL_SHELL_FLAG = "-lc"
+var SHELL_NAMES = ["bash", "sh", "zsh", "dash", "fish"]
+
+// Single quotes, with the standard '\'' break-out, which parseArgv reads back
+// exactly. Nothing inside is ever seen as syntax.
+function shellQuoteToken(value) {
+  return "'" + String(value === undefined || value === null ? "" : value).replace(/'/g, "'\\''") + "'"
+}
+
+// The shell line back out of the arguments. A line we wrote comes back
+// exactly, quotes and all; anything else — a hand-written mode, a capture —
+// is shown as the raw tail rather than re-joined from tokens, because
+// re-quoting is how `-c "cd x && y"` stops running.
 function terminalCommandOf(args) {
   var raw = asString(args, "").trim()
+  var parsed = parseArgv(raw)
+  if (!parsed.unterminated) {
+    var argv = parsed.argv
+    for (var i = 0; i < argv.length; i++) {
+      if (TERMINAL_EXEC_FLAGS.indexOf(argv[i]) === -1) continue
+      var rest = argv.slice(i + 1)
+      if (rest.length >= 3
+          && SHELL_NAMES.indexOf(String(rest[0]).split("/").pop()) !== -1
+          && /^-[a-z]*c$/.test(String(rest[1])))
+        return rest[2]
+      break
+    }
+  }
   var m = TERMINAL_EXEC_RE.exec(raw)
   return m ? raw.slice(m.index + m[0].length).trim() : ""
 }
 
-// Replace the command while keeping whatever flags came before it, so a
-// terminal captured with `--title notes -e btop` does not lose its title when
-// you change what it runs.
+// One shell line in, the arguments a terminal understands out. Flags that came
+// before the command are kept, so a terminal captured as `--title notes -e
+// btop` does not lose its title when you change what it runs.
 function setTerminalCommand(args, command) {
   var raw = asString(args, "").trim()
   var cmd = asString(command, "").replace(/[\r\n]+/g, " ").trim()
   var m = TERMINAL_EXEC_RE.exec(raw)
   var prefix = (m ? raw.slice(0, m.index) : raw).trim()
   if (cmd === "") return prefix
-  return (prefix === "" ? "" : prefix + " ") + "-e " + cmd
+  return (prefix === "" ? "" : prefix + " ")
+    + "-e " + TERMINAL_SHELL + " " + TERMINAL_SHELL_FLAG + " " + shellQuoteToken(cmd)
 }
 
 // The second line under an application's name: what makes this Foot the one

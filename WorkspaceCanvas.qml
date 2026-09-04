@@ -639,9 +639,14 @@ Item {
               readonly property bool roomForFields: width > Style.space(150)
                 && height > Style.space(120)
               readonly property bool editing: chosen && app && roomForFields
-              readonly property string detail: Model.applicationDetail(app)
               readonly property bool terminal: app !== null
                 && canvas.editor.applicationIsTerminal(app)
+              // A terminal shows the line it runs, not the `-e bash -lc` we
+              // wrapped it in — that wrapping is ours, not something the pane
+              // should make you read back.
+              readonly property string detail: terminal
+                ? Model.terminalCommandOf(app.args)
+                : Model.applicationDetail(app)
               // An icon with a name under it and nothing else looks like a
               // pane with nothing to set, so a pane carrying neither says on
               // hover what picking it would offer. Only where the fields
@@ -729,7 +734,7 @@ Item {
                   horizontalAlignment: Text.AlignHCenter
                   textFormat: Text.PlainText
                   text: pane.detail !== "" ? pane.detail
-                    : (pane.hinting ? (pane.terminal ? "run command  ·  folder" : "arguments  ·  folder") : "")
+                    : (pane.hinting ? (pane.terminal ? "command" : "arguments  ·  folder") : "")
                   // Dimmer than a real detail: this is an affordance, not a
                   // fact about the window.
                   color: pane.detail !== "" ? canvas.dim : Util.alpha(canvas.foreground, 0.34)
@@ -750,34 +755,38 @@ Item {
                   onEditingFinished: canvas.editor.setApplicationField(pane.modelData.app, "command", text)
                 }
 
-                // What to hand the program: a file, a URL, or for a terminal
-                // the command it should run instead of a shell.
-                //
-                // A terminal wants that command behind `-e`, which is not
-                // something anyone should have to know to fill in a box. So
-                // when the entry says it is a terminal the field asks for the
-                // command and the flag is ours to add — the stored string is
-                // the same either way, and typing the flag yourself still
-                // works.
+                // A terminal pane is one question — what should this terminal
+                // do? — so it gets one box, and `cd projects/app && claude` is
+                // a whole answer to it. Splitting that into a flag to know and
+                // a folder to fill in separately was asking you to take your
+                // own sentence apart.
                 TextField {
                   width: parent.width
-                  visible: pane.editing
-                  text: !pane.app ? ""
-                    : (pane.terminal ? Model.terminalCommandOf(pane.app.args)
-                                     : String(pane.app.args || ""))
-                  placeholderText: pane.terminal ? "Run command, e.g. btop"
-                    : (pane.app && pane.app.desktopId ? "Arguments, e.g. -e btop" : "Arguments")
+                  visible: pane.editing && pane.terminal
+                  text: pane.app ? Model.terminalCommandOf(pane.app.args) : ""
+                  placeholderText: "Command, e.g. cd projects/app && claude"
                   foreground: canvas.foreground
-                  Accessible.name: pane.terminal ? "Command to run in this terminal" : "Application arguments"
+                  Accessible.name: "Command to run in this terminal"
                   onEditingFinished: canvas.editor.setApplicationField(pane.modelData.app, "args",
-                    pane.terminal ? Model.setTerminalCommand(pane.app.args, text) : text)
+                    Model.setTerminalCommand(pane.app.args, text))
                 }
 
-                // The folder it starts in, which for a terminal is the cd you
-                // would otherwise type first.
+                // Everything that is not a terminal wants a file or a URL, not
+                // a shell line, and a folder is still a separate thing to say.
                 TextField {
                   width: parent.width
-                  visible: pane.editing
+                  visible: pane.editing && !pane.terminal
+                  text: pane.app ? String(pane.app.args || "") : ""
+                  placeholderText: pane.app && pane.app.desktopId
+                    ? "Arguments, e.g. https://omarchy.org" : "Arguments"
+                  foreground: canvas.foreground
+                  Accessible.name: "Application arguments"
+                  onEditingFinished: canvas.editor.setApplicationField(pane.modelData.app, "args", text)
+                }
+
+                TextField {
+                  width: parent.width
+                  visible: pane.editing && !pane.terminal
                   text: pane.app ? String(pane.app.directory || "") : ""
                   placeholderText: "Folder, e.g. ~/Projects"
                   foreground: canvas.foreground

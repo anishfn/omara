@@ -366,23 +366,26 @@ carry two things a `.desktop` file has no way to express:
 
 | Field | What it is |
 |---|---|
-| **Arguments** | Appended to the launch, split the way a shell would split them. A file, or a URL. On a terminal this field asks for the **run command** instead — see below. |
+| **Arguments** | Appended to the launch, split the way a shell would split them. A file, or a URL. Terminals get a single **Command** box instead — see below. |
 | **Folder** | The directory the program starts in — the `cd` you would otherwise type first. |
 
-On a pane whose application declares itself a terminal, the first field asks
-for the command instead of the arguments, because `-e` is not something you
-should have to know to fill in a box:
+A **terminal** is not asked either question. It gets one box, because a
+terminal is one question — what should this terminal do? — and
+`cd projects/app && claude` is a whole answer to it:
 
 ```
-Ghostty  run command  claude
-         folder       ~/Projects/omarchy
+Ghostty  command  cd projects/project1 && claude
 ```
 
-That is stored as `args: "-e claude"` — the same string you would have typed
-yourself, so nothing new goes in the config and typing the flag by hand still
-works. Flags that came before the command are kept, so a terminal captured as
-`--title notes -e btop` keeps its title when you change what it runs. Every
-other application still gets a plain **Arguments** field.
+Whatever you write there is a shell line, run by your login shell inside the
+terminal, so `&&`, `|`, `;` and quotes all mean what they mean anywhere else.
+Open that mode and the terminal comes up already in that folder with `claude`
+running.
+
+It is stored as `args: "-e bash -lc 'cd projects/project1 && claude'"`, and the
+line is a single quoted argument, so nothing in it is ever read as syntax by
+anything but the shell you meant it for. Flags that came before the command are
+kept, so a terminal captured as `--title notes -e btop` keeps its title.
 
 A terminal is recognised by its `.desktop` file declaring the freedesktop
 `TerminalEmulator` category, not by its name.

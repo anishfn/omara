@@ -1221,25 +1221,35 @@ test("a mode is renamed where its icon is chosen, and nowhere else", () => {
 })
 
 test("a terminal is asked what to run, not what flag to pass", () => {
-  // Reading and writing the tail of `-e`, without re-quoting what was typed.
-  assert.equal(Model.terminalCommandOf("-e btop"), "btop")
-  assert.equal(Model.terminalCommandOf(""), "")
-  assert.equal(Model.terminalCommandOf("--class foo"), "")
-  // Re-joining a parsed token list would turn this into something that no
-  // longer runs, so the raw tail is what comes back.
-  assert.equal(Model.terminalCommandOf('-e bash -c "cd x && y"'), 'bash -c "cd x && y"')
+  // A whole shell line goes in and comes back out unchanged, quotes included.
+  for (const line of [
+    "cd projects/project1 && claude",
+    "echo 'hi there' && claude",
+    'cd "My Notes" && vim',
+    "a && b || c; d | e"
+  ]) {
+    const stored = Model.setTerminalCommand("", line)
+    assert.equal(Model.terminalCommandOf(stored), line, `round trip: ${line}`)
+    // And it is one argument to the shell, never syntax in our own string.
+    const argv = Model.parseArgv(stored).argv
+    assert.deepEqual(argv.slice(0, 3), ["-e", "bash", "-lc"])
+    assert.equal(argv[3], line)
+    assert.equal(argv.length, 4)
+  }
 
-  assert.equal(Model.setTerminalCommand("", "claude"), "-e claude")
-  assert.equal(Model.setTerminalCommand("-e btop", "claude"), "-e claude")
   // Flags that came before the command are not the command, and survive.
-  assert.equal(Model.setTerminalCommand("--title notes -e btop", "claude"),
-    "--title notes -e claude")
+  assert.equal(Model.setTerminalCommand("--title notes -e btop", "cd x && y"),
+    "--title notes -e bash -lc 'cd x && y'")
   // Clearing the command clears the flag with it, rather than leaving a bare -e.
-  assert.equal(Model.setTerminalCommand("-e btop", ""), "")
+  assert.equal(Model.setTerminalCommand("-e bash -lc 'cd a && b'", ""), "")
   assert.equal(Model.setTerminalCommand("--title notes -e btop", ""), "--title notes")
   // A newline would end up in a shell command line.
   assert.equal(Model.setTerminalCommand("", "a\nb").indexOf("\n"), -1)
 
+  // A mode written by hand, or a capture, is shown as it stands.
+  assert.equal(Model.terminalCommandOf("-e btop --tree"), "btop --tree")
+  assert.equal(Model.terminalCommandOf(""), "")
+  assert.equal(Model.terminalCommandOf("--class foo"), "")
   // A whole word, so neither of these is the flag.
   assert.equal(Model.terminalCommandOf("--exec-ish btop"), "")
   assert.equal(Model.terminalCommandOf("/opt/thing-e btop"), "")
@@ -1248,30 +1258,40 @@ test("a terminal is asked what to run, not what flag to pass", () => {
   assert.equal(Model.isTerminalCategories(["System", "TerminalEmulator"]), true)
   assert.equal(Model.isTerminalCategories(["Network", "WebBrowser"]), false)
   assert.equal(Model.isTerminalCategories(undefined), false)
+  // QML hands a list<QString> over as something array-like that is not a JS
+  // Array. Guarding with Array.isArray said no to every real desktop entry
+  // while every plain-array test above still passed.
+  assert.equal(Model.isTerminalCategories({ length: 2, 0: "System", 1: "TerminalEmulator" }), true)
+  assert.equal(Model.isTerminalCategories({ length: 1, 0: "WebBrowser" }), false)
 
   const editor = read("EditorWindow.qml")
   assert.match(fnBody(editor, "function applicationIsTerminal(app)"),
     /Model\.isTerminalCategories\(entry\.categories\)/)
 
   const canvas = read("WorkspaceCanvas.qml")
-  assert.match(canvas, /pane\.terminal \? "Run command, e\.g\. btop"/)
-  assert.match(canvas, /pane\.terminal \? Model\.setTerminalCommand\(pane\.app\.args, text\) : text/)
+  // One box for a terminal: no flag to know, no folder to fill in separately.
+  assert.match(canvas, /placeholderText: "Command, e\.g\. cd projects\/app && claude"/)
+  assert.match(canvas, /visible: pane\.editing && pane\.terminal/)
+  // And the arguments and folder boxes are for everything that is not one.
+  assert.equal((canvas.match(/visible: pane\.editing && !pane\.terminal/g) || []).length, 2)
   // Same stored field either way: a terminal is a different question, not a
   // different schema.
   assert.match(canvas, /setApplicationField\(pane\.modelData\.app, "args"/)
+  // The pane shows the line, not the wrapping we put around it.
+  assert.match(canvas, /detail: terminal[\s\S]{0,80}Model\.terminalCommandOf\(app\.args\)/)
 })
 
 test("a pane says what it runs, and lets you say it", () => {
   const canvas = read("WorkspaceCanvas.qml")
   // The detail line is the only thing telling two Foots apart on a board.
-  assert.match(canvas, /readonly property string detail: Model\.applicationDetail\(app\)/)
+  assert.match(canvas, /Model\.applicationDetail\(app\)/)
 
   // A pane with no arguments and no folder is indistinguishable from a pane
   // that takes neither, so hovering one offers what picking it would give.
   assert.match(canvas, /readonly property bool hinting: app && !editing && detail === ""/)
   assert.match(canvas, /canvas\.pointerPath === modelData\.path/)
   // And the hint names the field the pane will actually offer.
-  assert.match(canvas, /pane\.hinting \? \(pane\.terminal \? "run command  ·  folder" : "arguments  ·  folder"\)/)
+  assert.match(canvas, /pane\.hinting \? \(pane\.terminal \? "command" : "arguments  ·  folder"\)/)
   // Never promised on a pane too small to take it up.
   assert.match(canvas, /hinting:[\s\S]{0,120}roomForFields/)
   assert.match(canvas, /editing: chosen && app && roomForFields/)
