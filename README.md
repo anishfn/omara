@@ -359,40 +359,42 @@ ghostty -e btop
 omarchy-launch-terminal
 ```
 
-#### Arguments and a folder
+#### Terminals get a command
 
-Every pane, whether it holds a desktop entry or a custom command, can also
-carry two things a `.desktop` file has no way to express:
-
-| Field | What it is |
-|---|---|
-| **Arguments** | Appended to the launch, split the way a shell would split them. A file, or a URL. Terminals get a single **Command** box instead — see below. |
-| **Folder** | The directory the program starts in — the `cd` you would otherwise type first. |
-
-A **terminal** is not asked either question. It gets one box, because a
-terminal is one question — what should this terminal do? — and
-`cd projects/app && claude` is a whole answer to it:
+Pick a **terminal** pane and it grows one box, right there on the canvas:
 
 ```
-Ghostty  command  cd projects/project1 && claude
+Ghostty  ┌────────────────────────────────────────────┐
+         │ cd projects/project1 && claude             │
+         └────────────────────────────────────────────┘
 ```
 
-Whatever you write there is a shell line, run by your login shell inside the
+Whatever you write is a shell line, run by your login shell inside that
 terminal, so `&&`, `|`, `;` and quotes all mean what they mean anywhere else.
-Open that mode and the terminal comes up already in that folder with `claude`
-running.
-
-It is stored as `args: "-e bash -lc 'cd projects/project1 && claude'"`, and the
-line is a single quoted argument, so nothing in it is ever read as syntax by
-anything but the shell you meant it for. Flags that came before the command are
-kept, so a terminal captured as `--title notes -e btop` keeps its title.
+Open the mode and the terminal comes up already in that folder with `claude`
+running. It is edited in the pane it will run in — there is nothing to set
+under *Options* for this.
 
 A terminal is recognised by its `.desktop` file declaring the freedesktop
 `TerminalEmulator` category, not by its name.
 
-Both are edited in the pane they run in: pick the pane and its name becomes the
-fields. Panes too small to hold a field just show what they run, on one line
-under the name, which is what tells two otherwise identical terminals apart.
+Every other application is asked nothing. A browser pane names a browser and
+that is the whole answer, so it stays an icon and a name. A pane holding a
+**Custom command** still has its command box, because there the command is the
+application.
+
+Stored as `args: "-e bash -lc 'cd projects/project1 && claude'"`, with the line
+as a single quoted argument, so nothing in it is read as syntax by anything but
+the shell you meant it for. Flags that came before the command are kept, so a
+terminal captured as `--title notes -e btop` keeps its title.
+
+Capture still records the arguments and the folder of *any* window, terminal or
+not, and a launch still honours both. A captured browser shows its URL on the
+pane's second line. There is no box to edit that in — close the pane and drop
+the app in again to clear it, or edit `wsmodes.json` directly.
+
+A pane too small to hold a box just shows what it runs, on one line under the
+name, which is what tells two otherwise identical terminals apart.
 
 A folder is stored the way you type it — `~/Projects`, not
 `/home/you/Projects` — so a mode exported off one machine still opens the right
@@ -792,6 +794,10 @@ also carry `args` and `directory`, and both are optional: `args` is appended to
 the launch and split the way a shell would split it, and `directory` is the
 folder it starts in, written `~`-relative so the mode travels between machines.
 Neither is passed to a shell to be parsed.
+
+Both apply to every application. The editor only offers a box for them on a
+terminal, where they are written as one command line; on anything else they are
+set by capture, or by editing this file.
 
 `workspaces.layouts` is the canvas: one entry per workspace tab, each holding a
 binary split tree. A node is either a leaf (`{"app": "<uid>"}`, or `""` for an

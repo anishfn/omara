@@ -638,7 +638,13 @@ Item {
               // stays a board of names.
               readonly property bool roomForFields: width > Style.space(150)
                 && height > Style.space(120)
-              readonly property bool editing: chosen && app && roomForFields
+              // A terminal is asked what to run; a pane holding a raw command
+              // is asked what that command is. A browser is asked nothing —
+              // the application it names is the whole answer — so it never
+              // enters editing, and its icon stays where it was.
+              readonly property bool hasFields: app !== null
+                && (terminal || !app.desktopId)
+              readonly property bool editing: chosen && hasFields && roomForFields
               readonly property bool terminal: app !== null
                 && canvas.editor.applicationIsTerminal(app)
               // A terminal shows the line it runs, not the `-e bash -lc` we
@@ -652,7 +658,7 @@ Item {
               // hover what picking it would offer. Only where the fields
               // would actually fit: a hint that cannot be taken up is worse
               // than no hint.
-              readonly property bool hinting: app && !editing && detail === ""
+              readonly property bool hinting: hasFields && !editing && detail === ""
                 && roomForFields && canvas.pointerPath === modelData.path
 
               x: modelData.x
@@ -734,7 +740,7 @@ Item {
                   horizontalAlignment: Text.AlignHCenter
                   textFormat: Text.PlainText
                   text: pane.detail !== "" ? pane.detail
-                    : (pane.hinting ? (pane.terminal ? "command" : "arguments  ·  folder") : "")
+                    : (pane.hinting ? "command" : "")
                   // Dimmer than a real detail: this is an affordance, not a
                   // fact about the window.
                   color: pane.detail !== "" ? canvas.dim : Util.alpha(canvas.foreground, 0.34)
@@ -769,29 +775,6 @@ Item {
                   Accessible.name: "Command to run in this terminal"
                   onEditingFinished: canvas.editor.setApplicationField(pane.modelData.app, "args",
                     Model.setTerminalCommand(pane.app.args, text))
-                }
-
-                // Everything that is not a terminal wants a file or a URL, not
-                // a shell line, and a folder is still a separate thing to say.
-                TextField {
-                  width: parent.width
-                  visible: pane.editing && !pane.terminal
-                  text: pane.app ? String(pane.app.args || "") : ""
-                  placeholderText: pane.app && pane.app.desktopId
-                    ? "Arguments, e.g. https://omarchy.org" : "Arguments"
-                  foreground: canvas.foreground
-                  Accessible.name: "Application arguments"
-                  onEditingFinished: canvas.editor.setApplicationField(pane.modelData.app, "args", text)
-                }
-
-                TextField {
-                  width: parent.width
-                  visible: pane.editing && !pane.terminal
-                  text: pane.app ? String(pane.app.directory || "") : ""
-                  placeholderText: "Folder, e.g. ~/Projects"
-                  foreground: canvas.foreground
-                  Accessible.name: "Application folder"
-                  onEditingFinished: canvas.editor.setApplicationField(pane.modelData.app, "directory", text)
                 }
               }
 

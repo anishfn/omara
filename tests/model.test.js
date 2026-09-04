@@ -1272,8 +1272,15 @@ test("a terminal is asked what to run, not what flag to pass", () => {
   // One box for a terminal: no flag to know, no folder to fill in separately.
   assert.match(canvas, /placeholderText: "Command, e\.g\. cd projects\/app && claude"/)
   assert.match(canvas, /visible: pane\.editing && pane\.terminal/)
-  // And the arguments and folder boxes are for everything that is not one.
-  assert.equal((canvas.match(/visible: pane\.editing && !pane\.terminal/g) || []).length, 2)
+  // And no boxes at all for anything else. A browser names an application and
+  // that is the whole answer, so it is asked nothing.
+  assert.doesNotMatch(canvas, /!pane\.terminal/)
+  assert.doesNotMatch(canvas, /placeholderText: "Folder/)
+  assert.doesNotMatch(canvas, /placeholderText: pane\.app && pane\.app\.desktopId/)
+  // Editing hides the icon, so a pane with nothing to show must never enter it.
+  assert.match(canvas, /readonly property bool hasFields: app !== null\s*\n\s*&& \(terminal \|\| !app\.desktopId\)/)
+  assert.match(canvas, /editing: chosen && hasFields && roomForFields/)
+  assert.match(canvas, /hinting: hasFields && !editing/)
   // Same stored field either way: a terminal is a different question, not a
   // different schema.
   assert.match(canvas, /setApplicationField\(pane\.modelData\.app, "args"/)
@@ -1288,18 +1295,17 @@ test("a pane says what it runs, and lets you say it", () => {
 
   // A pane with no arguments and no folder is indistinguishable from a pane
   // that takes neither, so hovering one offers what picking it would give.
-  assert.match(canvas, /readonly property bool hinting: app && !editing && detail === ""/)
+  assert.match(canvas, /readonly property bool hinting: hasFields && !editing && detail === ""/)
   assert.match(canvas, /canvas\.pointerPath === modelData\.path/)
   // And the hint names the field the pane will actually offer.
-  assert.match(canvas, /pane\.hinting \? \(pane\.terminal \? "command" : "arguments  ·  folder"\)/)
+  assert.match(canvas, /pane\.hinting \? "command" : ""/)
   // Never promised on a pane too small to take it up.
   assert.match(canvas, /hinting:[\s\S]{0,120}roomForFields/)
-  assert.match(canvas, /editing: chosen && app && roomForFields/)
-  for (const field of ["command", "args", "directory"])
-    assert.match(canvas, new RegExp(`setApplicationField\\(pane\\.modelData\\.app, "${field}"`))
   // Inputs only once a pane is picked and only where a field fits, so a board
   // of panes stays a board of names.
-  assert.match(canvas, /readonly property bool editing: chosen && app/)
+  assert.match(canvas, /editing: chosen && hasFields && roomForFields/)
+  for (const field of ["command", "args"])
+    assert.match(canvas, new RegExp(`setApplicationField\\(pane\\.modelData\\.app, "${field}"`))
 })
 
 test("probe output is bounded and cannot inherit from Object.prototype", () => {
