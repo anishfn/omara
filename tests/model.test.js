@@ -1233,13 +1233,28 @@ test("a terminal is asked what to run, not what flag to pass", () => {
     // And it is one argument to the shell, never syntax in our own string.
     const argv = Model.parseArgv(stored).argv
     assert.deepEqual(argv.slice(0, 3), ["-e", "bash", "-lc"])
-    assert.equal(argv[3], line)
     assert.equal(argv.length, 4)
+    assert.ok(argv[3].startsWith(line), "the line runs first, as written")
   }
 
+  // A command that fails keeps its window, or a typo is indistinguishable
+  // from a bug: the terminal vanishes and the log still says it launched.
+  const failing = Model.setTerminalCommand("", "cd ~/config && code .")
+  const script = Model.parseArgv(failing).argv[3]
+  assert.match(script, /\|\| \{ __c=\$\?;/)
+  assert.match(script, /exec bash; \}$/)
+  // $? has to be read before anything else in the block resets it.
+  assert.ok(script.indexOf("__c=$?") < script.indexOf("echo"),
+    "the exit code must be captured before the first echo")
+  // The wrapper is ours, not yours: you see back exactly what you typed.
+  assert.equal(Model.terminalCommandOf(failing), "cd ~/config && code .")
+  // A line written by hand, without the wrapper, still reads back unchanged.
+  assert.equal(Model.terminalCommandOf("-e bash -lc 'just this'"), "just this")
+
   // Flags that came before the command are not the command, and survive.
-  assert.equal(Model.setTerminalCommand("--title notes -e btop", "cd x && y"),
-    "--title notes -e bash -lc 'cd x && y'")
+  const titled = Model.setTerminalCommand("--title notes -e btop", "cd x && y")
+  assert.ok(titled.startsWith("--title notes -e bash -lc "), titled)
+  assert.equal(Model.terminalCommandOf(titled), "cd x && y")
   // Clearing the command clears the flag with it, rather than leaving a bare -e.
   assert.equal(Model.setTerminalCommand("-e bash -lc 'cd a && b'", ""), "")
   assert.equal(Model.setTerminalCommand("--title notes -e btop", ""), "--title notes")

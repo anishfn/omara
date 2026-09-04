@@ -262,6 +262,31 @@ var TERMINAL_SHELL = "bash"
 var TERMINAL_SHELL_FLAG = "-lc"
 var SHELL_NAMES = ["bash", "sh", "zsh", "dash", "fish"]
 
+// A command that fails takes its terminal down with it before you can read
+// why, and the activity log still says the launch succeeded — because it did.
+// A typo and a real fault look identical from the outside, so a non-zero exit
+// keeps the window and drops you into a shell in it. Success is untouched:
+// the command ends, the window closes.
+//
+// `__c=$?` has to come first. The next command in the block would otherwise
+// have already reset `$?` to its own status by the time it is read.
+var TERMINAL_KEEP_OPEN =
+  ' || { __c=$?; echo; echo "[command exited $__c]"; exec bash; }'
+
+// Appended on the way in and taken off on the way out, so what you typed is
+// what you see. A line written by hand, without it, reads back unchanged.
+function withKeepOpen(command) {
+  return command + TERMINAL_KEEP_OPEN
+}
+
+function withoutKeepOpen(command) {
+  var line = String(command === undefined || command === null ? "" : command)
+  var tail = TERMINAL_KEEP_OPEN
+  if (line.length > tail.length && line.slice(-tail.length) === tail)
+    return line.slice(0, line.length - tail.length)
+  return line
+}
+
 // Single quotes, with the standard '\'' break-out, which parseArgv reads back
 // exactly. Nothing inside is ever seen as syntax.
 function shellQuoteToken(value) {
@@ -283,7 +308,7 @@ function terminalCommandOf(args) {
       if (rest.length >= 3
           && SHELL_NAMES.indexOf(String(rest[0]).split("/").pop()) !== -1
           && /^-[a-z]*c$/.test(String(rest[1])))
-        return rest[2]
+        return withoutKeepOpen(rest[2])
       break
     }
   }
@@ -301,7 +326,8 @@ function setTerminalCommand(args, command) {
   var prefix = (m ? raw.slice(0, m.index) : raw).trim()
   if (cmd === "") return prefix
   return (prefix === "" ? "" : prefix + " ")
-    + "-e " + TERMINAL_SHELL + " " + TERMINAL_SHELL_FLAG + " " + shellQuoteToken(cmd)
+    + "-e " + TERMINAL_SHELL + " " + TERMINAL_SHELL_FLAG + " "
+    + shellQuoteToken(withKeepOpen(cmd))
 }
 
 // The second line under an application's name: what makes this Foot the one

@@ -383,10 +383,19 @@ that is the whole answer, so it stays an icon and a name. A pane holding a
 **Custom command** still has its command box, because there the command is the
 application.
 
-Stored as `args: "-e bash -lc 'cd projects/project1 && claude'"`, with the line
+**If the command fails, the terminal stays open.** It prints the exit code and
+drops you into a shell in that window, so you can read the error. Without that,
+`cd ~/config && code .` — one missing dot — closes instantly and looks exactly
+like a broken plugin, while the activity log still says the launch succeeded,
+because it did. A command that succeeds is untouched: when it ends, the window
+closes.
+
+Stored as `args: "-e bash -lc '<your line> || { ... }'"`, with the whole thing
 as a single quoted argument, so nothing in it is read as syntax by anything but
-the shell you meant it for. Flags that came before the command are kept, so a
-terminal captured as `--title notes -e btop` keeps its title.
+the shell you meant it for. The `|| { ... }` is the keep-open wrapper and is
+ours, not yours: the box always shows back exactly what you typed. Flags that
+came before the command are kept, so a terminal captured as
+`--title notes -e btop` keeps its title.
 
 Capture still records the arguments and the folder of *any* window, terminal or
 not, and a launch still honours both. A captured browser shows its URL on the
