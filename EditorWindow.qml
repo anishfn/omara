@@ -762,7 +762,7 @@ Item {
       onStreamFinished: {
         var dir = root.firstLine(text)
         if (dir === "" || !root.service) return
-        root.writeExport(dir + "/wsmodes-export.json", root.service.exportText(null))
+        root.writeExport(dir + "/omara-export.json", root.service.exportText(null))
       }
     }
   }
@@ -775,7 +775,7 @@ Item {
     anchors { top: true; bottom: true; left: true; right: true }
     color: "transparent"
     exclusionMode: ExclusionMode.Ignore
-    WlrLayershell.namespace: "wsmodes-editor"
+    WlrLayershell.namespace: "omara-editor"
     WlrLayershell.layer: WlrLayer.Overlay
 
     // Exclusive for long enough to take the keyboard, then OnDemand.
@@ -1386,7 +1386,7 @@ Item {
                     width: parent.width
                     wrapMode: Text.Wrap
                     textFormat: Text.PlainText
-                    text: "Config: ~/.config/omarchy/wsmodes.json"
+                    text: "Config: ~/.config/omarchy/omara.json"
                     color: root.dim
                     font.family: root.fontFamily
                     font.pixelSize: Style.font.caption

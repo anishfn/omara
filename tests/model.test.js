@@ -841,7 +841,7 @@ test("no example modes ship: blank is the only template", () => {
 })
 
 test("the bar mark is drawn in the theme's colour, not loaded as an image", () => {
-  const mark = read("ModesMark.qml")
+  const mark = read("OmaraMark.qml")
   // Drawn, whatever it is drawn out of — Rectangles today, a Shape before
   // that. What matters is that no pixels are loaded and the colour comes from
   // the theme, not which primitive happens to be enough for the shape.
@@ -849,15 +849,15 @@ test("the bar mark is drawn in the theme's colour, not loaded as an image", () =
   assert.doesNotMatch(mark, /\.(png|svg|jpg)/i, "the mark must not name an image file")
   assert.match(mark, /property color color: Color\.foreground/)
   const bar = read("BarWidget.qml")
-  assert.match(bar, /ModesMark \{/)
+  assert.match(bar, /OmaraMark \{/)
   assert.match(bar, /color: root\.foreground/)
   // A PNG in the bar cannot follow the theme; the logo belongs in the README.
-  assert.ok(!/assets\/wsmodes\.png/.test(bar), "the bar should not load the logo image")
+  assert.ok(!/assets\/omara\.png/.test(bar), "the bar should not load the logo image")
 })
 
 test("nothing user-visible still says context", () => {
   for (const file of ["README.md", "manifest.json", "BarWidget.qml", "EditorWindow.qml",
-    "ModeForm.qml", "ModeRow.qml", "Service.qml", "bin/wsmodes"]) {
+    "ModeForm.qml", "ModeRow.qml", "Service.qml", "bin/omara"]) {
     const source = read(file)
     // The one allowed mention is reading the old config file by its old name.
     const hits = source.split("\n").filter((line) => /\bcontexts?\b/i.test(line))
@@ -1033,7 +1033,7 @@ test("automatic and scripted switches never wait on the dialog", () => {
   const service = read("Service.qml")
   assert.match(service, /activateMode\(ctx\.id, \{ windows: "keep" \}\)/)
   assert.match(service, /function activateWindows\(id: string, mode: string\)/)
-  assert.match(read("bin/wsmodes"), /--close\) result=\$\(call activateWindows/)
+  assert.match(read("bin/omara"), /--close\) result=\$\(call activateWindows/)
 })
 
 test("settings expose the window question", () => {
@@ -1075,7 +1075,7 @@ test("the bar widget exposes the three names the shell's summon routing calls", 
 
 test("the service registers the IPC target the CLI talks to", () => {
   const qml = read("Service.qml")
-  assert.match(qml, /target: "wsmodes"/)
+  assert.match(qml, /target: "omara"/)
   for (const method of ["list", "current", "activate", "deactivate", "reload", "manage", "edit", "capture"])
     assert.match(qml, new RegExp("function " + method + "\\("), "missing IPC method " + method)
 })
@@ -1177,26 +1177,6 @@ test("capture asks Hyprland what is open before deciding what is open", () => {
   assert.match(fnBody(qml, "function beginCaptureProbe()"), /service\.captureWindows = openWindows\(\)/)
   // And a second capture cannot start while the first is still waiting.
   assert.match(body, /captureProcess\.running \|\| captureRefresh\.running/)
-})
-
-test("modes written under the old name are adopted once, and never resurrected", () => {
-  const qml = read("Service.qml")
-  assert.match(qml, /legacyConfigPath: home \+ "\/\.config\/omarchy\/omara\.json"/)
-
-  const load = fnBody(qml, "function loadConfigFromDisk()")
-  // Only on a first load that found nothing, and only once: after you have
-  // deleted every mode, the old file must not bring them back on the poll.
-  assert.match(load, /verdict === "absent" && !service\.configLoaded && !service\.legacyChecked/)
-  assert.match(load, /service\.legacyChecked = true/)
-
-  const adopt = fnBody(qml, "function adoptLegacyConfig()")
-  // Read, load, save under the new name. Nothing is moved or deleted, so the
-  // old file is still there if this was the wrong call.
-  assert.match(adopt, /service\.loadConfig\(text\)/)
-  assert.match(adopt, /service\.save\(\)/)
-  assert.doesNotMatch(adopt, /\brm\b|unlink|mv /)
-  // lastWrittenText is cleared first, or the save decides it is already done.
-  assert.match(adopt, /service\.lastWrittenText = ""[\s\S]*?service\.save\(\)/)
 })
 
 test("a mode is renamed where its icon is chosen, and nowhere else", () => {
@@ -1490,7 +1470,7 @@ test("the config read carries its own guarantees instead of checking first", () 
   // Writes publish through a fresh 0600 temp and a rename, so a symlink or a
   // FIFO at the target is replaced rather than written through.
   assert.match(qml, /umask 077/)
-  assert.match(qml, /mktemp "\$dir\/\.wsmodes\.XXXXXX"/)
+  assert.match(qml, /mktemp "\$dir\/\.omara\.XXXXXX"/)
   assert.match(qml, /mv -f -- "\$tmp" "\$target"/)
   // An incomplete check refuses; a guard that can be removed by breaking it
   // is not a guard.

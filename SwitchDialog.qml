@@ -33,7 +33,7 @@ Item {
     anchors { top: true; bottom: true; left: true; right: true }
     color: "transparent"
     exclusionMode: ExclusionMode.Ignore
-    WlrLayershell.namespace: "wsmodes-switch"
+    WlrLayershell.namespace: "omara-switch"
     WlrLayershell.layer: WlrLayer.Overlay
 
     // Primed then released, for the reason the editor is: a surface holding

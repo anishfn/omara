@@ -928,7 +928,7 @@ function parseConfig(text) {
   if (input.length > MAX_IMPORT_BYTES)
     return {
       config: defaultConfig(),
-      warnings: ["wsmodes.json is larger than " + MAX_IMPORT_BYTES + " bytes; started from defaults"],
+      warnings: ["omara.json is larger than " + MAX_IMPORT_BYTES + " bytes; started from defaults"],
       recovered: true,
       firstRun: false
     }
@@ -940,7 +940,7 @@ function parseConfig(text) {
   } catch (e) {
     return {
       config: defaultConfig(),
-      warnings: ["wsmodes.json is not valid JSON (" + (e && e.message ? e.message : "parse error") + "). Using defaults; the file was left untouched."],
+      warnings: ["omara.json is not valid JSON (" + (e && e.message ? e.message : "parse error") + "). Using defaults; the file was left untouched."],
       recovered: true,
       firstRun: false
     }
@@ -1287,7 +1287,7 @@ function exportPayload(config, ids) {
     delete ctx.enabled
     out.push(ctx)
   }
-  return { version: SCHEMA_VERSION, kind: "wsmodes-export", modes: out }
+  return { version: SCHEMA_VERSION, kind: "omara-export", modes: out }
 }
 
 function parseImport(text) {

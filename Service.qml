@@ -16,12 +16,8 @@ Item {
   property string omarchyPath: Quickshell.env("OMARCHY_PATH")
 
   readonly property string home: Quickshell.env("HOME")
-  readonly property string configPath: home + "/.config/omarchy/wsmodes.json"
-  readonly property string statePath: home + "/.local/state/omarchy/wsmodes-state.json"
-  // This plugin used to be called Omara. Modes written under that name are
-  // still your modes, so the first load that finds nothing at the new path
-  // looks here before deciding you have none.
-  readonly property string legacyConfigPath: home + "/.config/omarchy/omara.json"
+  readonly property string configPath: home + "/.config/omarchy/omara.json"
+  readonly property string statePath: home + "/.local/state/omarchy/omara-state.json"
 
   // ------------------------------------------------------------------ state
 
@@ -51,8 +47,8 @@ Item {
     var next = [entry].concat(activityLog)
     if (next.length > activityLogLimit) next = next.slice(0, activityLogLimit)
     activityLog = next
-    if (level === "warn") console.warn("[wsmodes]", message)
-    else console.log("[wsmodes]", message)
+    if (level === "warn") console.warn("[omara]", message)
+    else console.log("[omara]", message)
     service.logged()
   }
 
@@ -311,7 +307,7 @@ Item {
   //
   // Quickshell's FileView takes a pathname, opens it, and reads to the end. It
   // has no descriptor-relative read, no O_NOFOLLOW, no non-blocking open and no
-  // size ceiling, so a FIFO at wsmodes.json would block the shell on first read
+  // size ceiling, so a FIFO at omara.json would block the shell on first read
   // and a symlink would redirect where modes are persisted.
   //
   // Checking the path and then handing the same name to FileView only narrows
@@ -374,7 +370,7 @@ Item {
     'target=$1\n' +
     dirCheck +
     'umask 077\n' +
-    'tmp=$(mktemp "$dir/.wsmodes.XXXXXX") || fail "no temporary file could be made in $dir"\n' +
+    'tmp=$(mktemp "$dir/.omara.XXXXXX") || fail "no temporary file could be made in $dir"\n' +
     'cat > "$tmp" || { rm -f "$tmp"; fail "the write did not complete"; }\n' +
     'mv -f -- "$tmp" "$target" || { rm -f "$tmp"; fail "the file could not be replaced"; }\n' +
     'printf \'RESULT\\tok\\t\\n\'\n'
@@ -514,7 +510,7 @@ Item {
     writeGuarded(service.configPath, text, function(verdict, detail) {
       if (verdict === "ok" || verdict === "superseded") return
       service.lastWrittenText = ""
-      log("warn", "Could not write wsmodes.json: " + detail)
+      log("warn", "Could not write omara.json: " + detail)
     })
   }
 
@@ -533,41 +529,9 @@ Item {
       service.configRefusal = ""
       var text = verdict === "absent" ? "" : content
 
-      // Exactly once, and only on the first load: after you have deleted
-      // every mode, a file left over from the old name must not bring them
-      // back on the next poll.
-      if (verdict === "absent" && !service.configLoaded && !service.legacyChecked) {
-        service.legacyChecked = true
-        service.adoptLegacyConfig()
-        return
-      }
-      service.legacyChecked = true
-
       if (service.configLoaded && text === service.lastWrittenText) return
       service.lastWrittenText = text
       service.loadConfig(text)
-    })
-  }
-
-  property bool legacyChecked: false
-
-  // Read the old file and load it as if it had been found at the new path.
-  // Nothing is moved or deleted: the next save writes wsmodes.json, and
-  // omara.json is left exactly where it is, in case you want to go back.
-  function adoptLegacyConfig() {
-    readGuarded(service.legacyConfigPath, function(verdict, detail, content) {
-      var text = verdict === "ok" ? String(content || "") : ""
-      // Empty either way, so the next save is a real write rather than a
-      // comparison against text that was never on disk under this name.
-      service.lastWrittenText = ""
-      if (text.trim() === "") {
-        service.loadConfig("")
-        return
-      }
-      log("info", "Adopted your modes from " + service.legacyConfigPath
-        + "; from now on they are saved to " + service.configPath)
-      service.loadConfig(text)
-      service.save()
     })
   }
 
@@ -586,10 +550,10 @@ Item {
     var reason = String(detail || "it did not pass the file check")
     if (service.configRefusal === reason) return
     service.configRefusal = reason
-    log("warn", "Refusing to read or write wsmodes.json: " + reason)
+    log("warn", "Refusing to read or write omara.json: " + reason)
     notify([
       "omarchy-notification-send", "--app-name", "Workspace Modes", "-u", "critical", "Workspace Modes",
-      "wsmodes.json was not used because " + reason
+      "omara.json was not used because " + reason
         + ". Workspace Modes started with no modes and will not write to that path. Nothing was changed or deleted."
     ])
   }
@@ -601,12 +565,12 @@ Item {
   function backupBrokenConfig(raw) {
     var backup = service.configPath + ".corrupt"
     writeGuarded(backup, String(raw === undefined || raw === null ? "" : raw), function(verdict, detail) {
-      if (verdict === "ok") log("warn", "Saved the unreadable wsmodes.json as " + backup)
+      if (verdict === "ok") log("warn", "Saved the unreadable omara.json as " + backup)
       else log("warn", "Could not save " + backup + ": " + detail)
     })
     notify([
       "omarchy-notification-send", "--app-name", "Workspace Modes", "-u", "normal",
-      "Workspace Modes", "wsmodes.json could not be read. A copy was saved as wsmodes.json.corrupt."
+      "Workspace Modes", "omara.json could not be read. A copy was saved as omara.json.corrupt."
     ])
   }
 
@@ -624,7 +588,7 @@ Item {
     readGuarded(service.statePath, function(verdict, detail, content) {
       if (verdict === "refuse") {
         service.stateReadOnly = true
-        log("warn", "Not reading or writing wsmodes-state.json: " + detail)
+        log("warn", "Not reading or writing omara-state.json: " + detail)
         return
       }
       service.stateReadOnly = false
@@ -648,7 +612,7 @@ Item {
     writeGuarded(service.statePath, JSON.stringify(service.previousState, null, 2) + "\n",
       function(verdict, detail) {
         if (verdict !== "ok" && verdict !== "superseded")
-          log("warn", "Could not write wsmodes-state.json: " + detail)
+          log("warn", "Could not write omara-state.json: " + detail)
       })
   }
 
@@ -1797,7 +1761,7 @@ Item {
       "-u", "normal",
       "Switch to " + ctx.name + "?",
       decision.reason + ", click to switch",
-      "--exec", "omarchy-shell", "-q", "wsmodes", "activateWindows", ctx.id, "keep"
+      "--exec", "omarchy-shell", "-q", "omara", "activateWindows", ctx.id, "keep"
     ])
   }
 
@@ -1839,7 +1803,7 @@ Item {
   // --------------------------------------------------------------------- IPC
 
   IpcHandler {
-    target: "wsmodes"
+    target: "omara"
 
     function list(): string {
       var out = []
