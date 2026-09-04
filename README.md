@@ -366,15 +366,26 @@ carry two things a `.desktop` file has no way to express:
 
 | Field | What it is |
 |---|---|
-| **Arguments** | Appended to the launch, split the way a shell would split them. A file, a URL, or for a terminal the command to run instead of a shell. |
+| **Arguments** | Appended to the launch, split the way a shell would split them. A file, or a URL. On a terminal this field asks for the **run command** instead — see below. |
 | **Folder** | The directory the program starts in — the `cd` you would otherwise type first. |
 
-So a terminal that opens on a project and starts something there is one pane:
+On a pane whose application declares itself a terminal, the first field asks
+for the command instead of the arguments, because `-e` is not something you
+should have to know to fill in a box:
 
 ```
-Foot     arguments  -e claude
-         folder     ~/Projects/omarchy
+Ghostty  run command  claude
+         folder       ~/Projects/omarchy
 ```
+
+That is stored as `args: "-e claude"` — the same string you would have typed
+yourself, so nothing new goes in the config and typing the flag by hand still
+works. Flags that came before the command are kept, so a terminal captured as
+`--title notes -e btop` keeps its title when you change what it runs. Every
+other application still gets a plain **Arguments** field.
+
+A terminal is recognised by its `.desktop` file declaring the freedesktop
+`TerminalEmulator` category, not by its name.
 
 Both are edited in the pane they run in: pick the pane and its name becomes the
 fields. Panes too small to hold a field just show what they run, on one line

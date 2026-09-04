@@ -228,6 +228,47 @@ function applicationLabel(app) {
   return app.desktopId ? String(app.desktopId) : String(app.command || "")
 }
 
+// ------------------------------------------------- terminals and commands
+//
+// A terminal is told what to run with `-e`, and everything after it is that
+// command. Knowing that is not the user's job, so the editor offers "run
+// this" and these two turn it into, and back out of, the argument string that
+// is actually stored. Nothing new goes in the config: `-e btop` is still
+// `-e btop`, whether you typed the flag or we did.
+
+// Matched as a whole word, so `--exec-ish` and a path ending in `-e` are not
+// mistaken for the flag.
+var TERMINAL_EXEC_RE = /(^|\s)(-e|-x|--command|--execute)(?=\s|$)/
+
+// A .desktop file declaring itself a terminal is the freedesktop-standard
+// signal, and a far better one than guessing from the application's name.
+function isTerminalCategories(categories) {
+  var list = Array.isArray(categories) ? categories : []
+  for (var i = 0; i < list.length; i++)
+    if (String(list[i]).trim().toLowerCase() === "terminalemulator") return true
+  return false
+}
+
+// The raw tail, not a re-joined token list: re-quoting what someone typed is
+// how `-c "cd x && y"` turns into something that no longer runs.
+function terminalCommandOf(args) {
+  var raw = asString(args, "").trim()
+  var m = TERMINAL_EXEC_RE.exec(raw)
+  return m ? raw.slice(m.index + m[0].length).trim() : ""
+}
+
+// Replace the command while keeping whatever flags came before it, so a
+// terminal captured with `--title notes -e btop` does not lose its title when
+// you change what it runs.
+function setTerminalCommand(args, command) {
+  var raw = asString(args, "").trim()
+  var cmd = asString(command, "").replace(/[\r\n]+/g, " ").trim()
+  var m = TERMINAL_EXEC_RE.exec(raw)
+  var prefix = (m ? raw.slice(0, m.index) : raw).trim()
+  if (cmd === "") return prefix
+  return (prefix === "" ? "" : prefix + " ") + "-e " + cmd
+}
+
 // The second line under an application's name: what makes this Foot the one
 // running btop rather than any other Foot. Arguments say more than a folder,
 // so they win when a window has both.
@@ -1709,6 +1750,9 @@ if (typeof module !== "undefined" && module.exports) {
     normalizeApplication: normalizeApplication,
     applicationLabel: applicationLabel,
     applicationDetail: applicationDetail,
+    isTerminalCategories: isTerminalCategories,
+    terminalCommandOf: terminalCommandOf,
+    setTerminalCommand: setTerminalCommand,
     applicationRunLine: applicationRunLine,
     prettyDirectory: prettyDirectory,
     collapseHome: collapseHome,

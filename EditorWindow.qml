@@ -490,6 +490,14 @@ Item {
     return String(app.desktopId) + "  (not installed)"
   }
 
+  // A .desktop file says so itself. Guessing from the name would call
+  // "Terminal Emoji Picker" a terminal and miss anything not called one.
+  function applicationIsTerminal(app) {
+    if (!app || !app.desktopId || !service) return false
+    var entry = service.desktopEntry(app.desktopId)
+    return entry ? Model.isTerminalCategories(entry.categories) : false
+  }
+
   function applicationIcon(app) {
     if (!app || !app.desktopId || !service || !service.appLibrary) return ""
     var entry = service.desktopEntry(app.desktopId)
