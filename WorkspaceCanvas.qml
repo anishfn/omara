@@ -618,6 +618,69 @@ Item {
           anchors.fill: parent
           anchors.margins: Style.space(6)
 
+          // Declared first, so everything else on the board sits above it.
+          // A pane is a Rectangle and does not consume a press, so clicks still
+          // fall through to here — but the command box inside a pane is a real
+          // input, and it has to be able to take a click before this does.
+          // Dividers and pane controls are declared after for the same reason.
+          MouseArea {
+            id: boardMouse
+            anchors.fill: parent
+            hoverEnabled: true
+            acceptedButtons: Qt.LeftButton
+
+            property real pressX: 0
+            property real pressY: 0
+            property string pressPath: ""
+            property bool armed: false
+
+            onPressed: function(mouse) {
+              var pane = canvas.paneUnder(mouse.x, mouse.y)
+              boardMouse.pressX = mouse.x
+              boardMouse.pressY = mouse.y
+              boardMouse.pressPath = pane ? pane.path : ""
+              boardMouse.armed = pane !== null
+              if (pane) canvas.selectedPath = pane.path
+            }
+
+            onPositionChanged: function(mouse) {
+              if (!boardMouse.armed) return
+              if (!canvas.dragging) {
+                if (Math.abs(mouse.x - boardMouse.pressX) + Math.abs(mouse.y - boardMouse.pressY) < Style.space(6)) return
+                var node = Model.paneAt(canvas.tree, boardMouse.pressPath)
+                if (!node || node.app === "") { boardMouse.armed = false; return }
+                canvas.startPaneDrag(boardMouse.pressPath, node.app)
+              }
+              var p = canvas.mapFromItem(boardMouse, mouse.x, mouse.y)
+              canvas.dragMove(p.x, p.y)
+            }
+
+            onReleased: function(mouse) {
+              if (canvas.dragging) {
+                var p = canvas.mapFromItem(boardMouse, mouse.x, mouse.y)
+                canvas.dragDrop(p.x, p.y)
+                boardMouse.armed = false
+                return
+              }
+              // An empty pane is a slot with nothing to select, so a click on
+              // one asks what goes in it rather than quietly highlighting it.
+              var pane = canvas.paneUnder(mouse.x, mouse.y)
+              if (boardMouse.armed && pane && pane.app === "" && pane.path === boardMouse.pressPath)
+                canvas.editor.openAppPicker(canvas.tab, pane.path)
+              boardMouse.armed = false
+            }
+
+            onCanceled: {
+              boardMouse.armed = false
+              canvas.dragCancel()
+            }
+
+            onDoubleClicked: function(mouse) {
+              var pane = canvas.paneUnder(mouse.x, mouse.y)
+              if (pane) canvas.editor.openAppPicker(canvas.tab, pane.path)
+            }
+          }
+
           // ------------------------------------------------------- panes
           Repeater {
             model: canvas.rects.panes.length
@@ -806,65 +869,6 @@ Item {
             }
           }
 
-          // Below the dividers and the pane controls on purpose: those are
-          // declared after, so the pointer reaches them first.
-          MouseArea {
-            id: boardMouse
-            anchors.fill: parent
-            hoverEnabled: true
-            acceptedButtons: Qt.LeftButton
-
-            property real pressX: 0
-            property real pressY: 0
-            property string pressPath: ""
-            property bool armed: false
-
-            onPressed: function(mouse) {
-              var pane = canvas.paneUnder(mouse.x, mouse.y)
-              boardMouse.pressX = mouse.x
-              boardMouse.pressY = mouse.y
-              boardMouse.pressPath = pane ? pane.path : ""
-              boardMouse.armed = pane !== null
-              if (pane) canvas.selectedPath = pane.path
-            }
-
-            onPositionChanged: function(mouse) {
-              if (!boardMouse.armed) return
-              if (!canvas.dragging) {
-                if (Math.abs(mouse.x - boardMouse.pressX) + Math.abs(mouse.y - boardMouse.pressY) < Style.space(6)) return
-                var node = Model.paneAt(canvas.tree, boardMouse.pressPath)
-                if (!node || node.app === "") { boardMouse.armed = false; return }
-                canvas.startPaneDrag(boardMouse.pressPath, node.app)
-              }
-              var p = canvas.mapFromItem(boardMouse, mouse.x, mouse.y)
-              canvas.dragMove(p.x, p.y)
-            }
-
-            onReleased: function(mouse) {
-              if (canvas.dragging) {
-                var p = canvas.mapFromItem(boardMouse, mouse.x, mouse.y)
-                canvas.dragDrop(p.x, p.y)
-                boardMouse.armed = false
-                return
-              }
-              // An empty pane is a slot with nothing to select, so a click on
-              // one asks what goes in it rather than quietly highlighting it.
-              var pane = canvas.paneUnder(mouse.x, mouse.y)
-              if (boardMouse.armed && pane && pane.app === "" && pane.path === boardMouse.pressPath)
-                canvas.editor.openAppPicker(canvas.tab, pane.path)
-              boardMouse.armed = false
-            }
-
-            onCanceled: {
-              boardMouse.armed = false
-              canvas.dragCancel()
-            }
-
-            onDoubleClicked: function(mouse) {
-              var pane = canvas.paneUnder(mouse.x, mouse.y)
-              if (pane) canvas.editor.openAppPicker(canvas.tab, pane.path)
-            }
-          }
 
           HoverHandler {
             id: boardHover

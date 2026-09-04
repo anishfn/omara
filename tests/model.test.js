@@ -1288,6 +1288,25 @@ test("a terminal is asked what to run, not what flag to pass", () => {
   assert.match(canvas, /detail: terminal[\s\S]{0,80}Model\.terminalCommandOf\(app\.args\)/)
 })
 
+test("the board's mouse area cannot swallow a click meant for a pane's box", () => {
+  const canvas = read("WorkspaceCanvas.qml")
+  // Later siblings are on top and are offered the press first. boardMouse
+  // fills the whole board, so declared after the panes it covers every input
+  // inside one: the command box rendered, and could never be clicked.
+  //
+  // A pane is a Rectangle and does not consume a press, so clicks on a pane's
+  // background still reach boardMouse from below.
+  const mouse = canvas.indexOf("id: boardMouse")
+  const panes = canvas.indexOf("// ------------------------------------------------------- panes")
+  assert.ok(mouse !== -1 && panes !== -1, "expected both boardMouse and the panes block")
+  assert.ok(mouse < panes,
+    "boardMouse must be declared before the panes, or it covers their inputs")
+
+  // The dividers and the pane controls still sit above it, as before.
+  for (const later of ["---- dividers", "------ pane controls"])
+    assert.ok(canvas.indexOf(later) > mouse, `${later} should stay above boardMouse`)
+})
+
 test("a pane says what it runs, and lets you say it", () => {
   const canvas = read("WorkspaceCanvas.qml")
   // The detail line is the only thing telling two Foots apart on a board.
