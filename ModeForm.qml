@@ -9,7 +9,10 @@ import "Model.js" as Model
 // view rather than a section of this form.
 //
 // Text fields commit on editingFinished so the draft does not change (and
-// re-drive the `text` binding) while you are typing.
+// re-drive the `text` binding) while you are typing. They are EditFields
+// rather than plain TextFields: that is what re-syncs a field whose binding
+// typing has broken, keeps a visit with no change from marking the mode
+// unsaved, and stops Escape walking up to close the whole panel.
 Column {
   id: form
 
@@ -52,13 +55,13 @@ Column {
     onClicked: form.editor.openIconPicker()
   }
 
-  TextField {
+  EditField {
     width: form.width
-    text: form.draft ? form.draft.description : ""
+    committed: form.draft ? form.draft.description : ""
     placeholderText: "Description"
     foreground: form.foreground
     Accessible.name: "Mode description"
-    onEditingFinished: form.editor.setDraft("description", text)
+    onCommit: function(value) { form.editor.setDraft("description", value) }
   }
 
   Text {
@@ -105,13 +108,13 @@ Column {
     width: form.width
     spacing: Style.space(6)
 
-    TextField {
+    EditField {
       width: form.width - browseButton.width - parent.spacing
-      text: form.draft && form.draft.appearance.wallpaper ? String(form.draft.appearance.wallpaper) : ""
+      committed: form.draft && form.draft.appearance.wallpaper ? String(form.draft.appearance.wallpaper) : ""
       placeholderText: "Wallpaper path, blank leaves it alone"
       foreground: form.foreground
       Accessible.name: "Wallpaper path"
-      onEditingFinished: form.editor.setDraft("appearance.wallpaper", text)
+      onCommit: function(value) { form.editor.setDraft("appearance.wallpaper", value) }
     }
 
     Button {
@@ -181,13 +184,15 @@ Column {
         width: form.width
         spacing: Style.space(6)
 
-        TextField {
+        EditField {
           width: form.width - Style.space(46)
-          text: modelData
+          committed: String(modelData)
           placeholderText: "Shell command"
           foreground: form.foreground
           Accessible.name: "Activation command"
-          onEditingFinished: form.editor.setDraftListItem("commands.onActivate", index, text)
+          onCommit: function(value) {
+            form.editor.setDraftListItem("commands.onActivate", index, value)
+          }
         }
 
         PanelActionButton {
@@ -223,13 +228,15 @@ Column {
         width: form.width
         spacing: Style.space(6)
 
-        TextField {
+        EditField {
           width: form.width - Style.space(46)
-          text: modelData
+          committed: String(modelData)
           placeholderText: "Shell command"
           foreground: form.foreground
           Accessible.name: "Deactivation command"
-          onEditingFinished: form.editor.setDraftListItem("commands.onDeactivate", index, text)
+          onCommit: function(value) {
+            form.editor.setDraftListItem("commands.onDeactivate", index, value)
+          }
         }
 
         PanelActionButton {
@@ -285,16 +292,18 @@ Column {
           })
         }
 
-        TextField {
+        EditField {
           width: form.width - Style.space(210)
-          text: modelData.value
+          committed: String(modelData.value)
           placeholderText: "Window class, e.g. steam"
           foreground: form.foreground
           Accessible.name: "Trigger window class"
-          onEditingFinished: form.editor.setDraftListItem("triggers", index, {
-            type: modelData.type, value: text,
-            enabled: modelData.enabled !== false, behavior: modelData.behavior
-          })
+          onCommit: function(value) {
+            form.editor.setDraftListItem("triggers", index, {
+              type: modelData.type, value: value,
+              enabled: modelData.enabled !== false, behavior: modelData.behavior
+            })
+          }
         }
 
         Dropdown {
