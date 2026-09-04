@@ -582,8 +582,20 @@ function normalizePaneNode(raw, depth, budget) {
     var second = normalizePaneNode(raw.children[1], depth + 1, budget)
     return paneSplitNode(raw.split, first, second, raw.ratio)
   }
-  var uid = asString(raw.app, "").trim()
+  // Past the depth or the pane budget the shape cannot be kept, but what was
+  // in it still can: the subtree collapses to the first application it held
+  // rather than to nothing, and reconcileLayouts gives the rest panes of their
+  // own. Reading `app` off a split node — which is what this used to do — is
+  // always undefined, so the whole subtree used to vanish silently.
+  var uid = isPaneSplit(raw) ? firstPaneUid(raw) : asString(raw.app, "").trim()
   return paneLeaf(UID_PATTERN.test(uid) ? uid : "")
+}
+
+function firstPaneUid(raw) {
+  if (!isPlainObject(raw)) return ""
+  if (isPaneSplit(raw)) return firstPaneUid(raw.children[0]) || firstPaneUid(raw.children[1])
+  var uid = asString(raw.app, "").trim()
+  return UID_PATTERN.test(uid) ? uid : ""
 }
 
 // A layout's workspace is either a reference Hyprland can name or "", which
@@ -1355,10 +1367,12 @@ function importModes(config, incoming, mode) {
       replaced.push(normalized.id)
       continue
     }
+    // Renamed before normalizing, not after: appending to an already-clamped
+    // name is the one way a string in the config gets past MAX_STRING.
     delete ctx.id
+    if (asString(ctx.name, "").trim() !== "") ctx.name = String(ctx.name) + " (copy)"
     var copy = normalizeMode(ctx, modeIds(next))
     if (!copy) continue
-    copy.name = ctx.name ? ctx.name + " (copy)" : copy.name
     next.modes.push(copy)
     added.push(copy.id)
   }
@@ -1633,20 +1647,147 @@ function captureDirectory(cwd, home) {
   return collapsed.slice(0, MAX_DIRECTORY)
 }
 
+// Recover the shape of a workspace from where its windows actually sit.
+//
+// A tiling layout is a series of straight cuts, so a line with every window
+// cleanly on one side of it is a split, and where that line fell is the
+// ratio. Recursing on each side rebuilds the tree the compositor drew.
+function paneRectBounds(list) {
+  var b = { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity }
+  for (var i = 0; i < list.length; i++) {
+    var it = list[i]
+    if (it.x < b.x0) b.x0 = it.x
+    if (it.y < b.y0) b.y0 = it.y
+    if (it.x + it.width > b.x1) b.x1 = it.x + it.width
+    if (it.y + it.height > b.y1) b.y1 = it.y + it.height
+  }
+  return b
+}
+
+// The cut along one axis that leaves the two sides most evenly filled, or
+// null when every line through this set crosses a window.
+function paneRectCut(list, key, sizeKey) {
+  var sorted = list.slice().sort(function(a, b) { return a[key] - b[key] })
+  var best = null
+  var edge = -Infinity
+  for (var i = 0; i < sorted.length - 1; i++) {
+    var far = sorted[i][key] + sorted[i][sizeKey]
+    if (far > edge) edge = far
+    // Still overlapping: there is no line here with nothing across it.
+    if (edge > sorted[i + 1][key]) continue
+    var balance = Math.abs((i + 1) - (sorted.length - i - 1))
+    if (best !== null && balance >= best.balance) continue
+    best = { index: i, balance: balance, at: (edge + sorted[i + 1][key]) / 2 }
+  }
+  if (best === null) return null
+  return {
+    first: sorted.slice(0, best.index + 1),
+    second: sorted.slice(best.index + 1),
+    at: best.at,
+    balance: best.balance
+  }
+}
+
+// What paneAppend would have built. Used when there is no geometry to read —
+// a compositor that did not answer, or a window with no size — so a capture
+// without positions is still the grid it always used to be rather than a
+// tower of degenerate splits.
+function paneGridOf(list) {
+  var tree = paneLeaf("")
+  for (var i = 0; i < list.length; i++) tree = paneAppend(tree, list[i].uid)
+  return tree
+}
+
+function paneTreeFromRects(items) {
+  var list = Array.isArray(items) ? items : []
+  if (list.length === 0) return paneLeaf("")
+  if (list.length === 1) return paneLeaf(list[0].uid)
+
+  for (var i = 0; i < list.length; i++)
+    if (!(list[i].width > 0) || !(list[i].height > 0)) return paneGridOf(list)
+
+  var bounds = paneRectBounds(list)
+  var span = { x: bounds.x1 - bounds.x0, y: bounds.y1 - bounds.y0 }
+  if (!(span.x > 0) || !(span.y > 0)) return paneGridOf(list)
+
+  var row = paneRectCut(list, "x", "width")
+  var column = paneRectCut(list, "y", "height")
+  var cut = null
+  var direction = "row"
+  if (row && (!column || row.balance <= column.balance)) { cut = row; direction = "row" }
+  else if (column) { cut = column; direction = "column" }
+
+  if (!cut) {
+    // Floating or stacked windows are not a set of cuts. Peel one off and keep
+    // going, so a pile still arrives as panes rather than as one of them.
+    return paneSplitNode("row", paneLeaf(list[0].uid),
+      paneTreeFromRects(list.slice(1)), 0.5)
+  }
+
+  var ratio = direction === "row"
+    ? (cut.at - bounds.x0) / span.x
+    : (cut.at - bounds.y0) / span.y
+  return paneSplitNode(direction,
+    paneTreeFromRects(cut.first), paneTreeFromRects(cut.second), ratio)
+}
+
+// Numbered workspaces first and in order, then named ones, then "wherever you
+// are" — which is where a window Hyprland would not name ends up.
+function captureWorkspaceRank(ws) {
+  if (ws === "") return 3
+  return /^\d+$/.test(ws) ? 1 : 2
+}
+
+function captureLayouts(placements) {
+  var order = []
+  var groups = Object.create(null)
+  for (var i = 0; i < placements.length; i++) {
+    var ws = placements[i].workspace
+    if (!groups["w:" + ws]) { groups["w:" + ws] = []; order.push(ws) }
+    groups["w:" + ws].push(placements[i])
+  }
+  order.sort(function(a, b) {
+    var ra = captureWorkspaceRank(a), rb = captureWorkspaceRank(b)
+    if (ra !== rb) return ra - rb
+    if (ra === 1) return Number(a) - Number(b)
+    return a < b ? -1 : (a > b ? 1 : 0)
+  })
+  var out = []
+  for (i = 0; i < order.length && out.length < MAX_LAYOUTS; i++)
+    out.push({ workspace: order[i], tree: paneTreeFromRects(groups["w:" + order[i]]) })
+  return out
+}
+
+function asPixels(value) {
+  var n = Number(value)
+  return isFinite(n) ? n : 0
+}
+
 // Shape a snapshot of the running desktop into mode fields. Takes plain
 // data so it stays testable; the caller gathers it from Hyprland/PipeWire.
 //
 // state: { name, description, workspace, dnd, audioOutput, wallpaper, theme,
-//          windows: [{ desktopId, command, workspace, title, args, directory }] }
+//          windows: [{ desktopId, command, workspace, title, args, directory,
+//                      x, y, width, height }] }
+//
+// One window is one pane. Folding two identical windows into a single entry is
+// what a flat list of applications had to do; on a canvas it throws away half
+// of what was on the screen, and two bare terminals side by side — which have
+// nothing to tell them apart but where they are — are exactly the case it lost.
 function captureMode(state) {
   var s = isPlainObject(state) ? state : {}
   var windows = Array.isArray(s.windows) ? s.windows : []
 
   var apps = []
-  var seen = {}
-  for (var i = 0; i < windows.length; i++) {
+  var placements = []
+  var i
+  for (i = 0; i < windows.length && apps.length < MAX_APPLICATIONS; i++) {
     var w = isPlainObject(windows[i]) ? windows[i] : {}
     var app = normalizeApplication({
+      // Minted here rather than left to assignApplicationUids, because the
+      // panes built below have to be able to name these before normalization
+      // has run over them.
+      uid: "p" + (apps.length + 1),
       desktopId: w.desktopId,
       command: w.command,
       args: w.args,
@@ -1656,34 +1797,43 @@ function captureMode(state) {
       enabled: true
     })
     if (!app) continue
-    // Three terminals on one workspace are one entry, not three — but a
-    // terminal running btop and a terminal sitting in ~/Projects are two
-    // different things to open, so what they run is part of what they are.
-    var key = (app.desktopId || app.command) + " " + app.args + " " + app.directory
-      + "@" + String(app.workspace)
-    if (seen[key]) continue
-    seen[key] = true
     apps.push(app)
+    placements.push({
+      uid: app.uid,
+      workspace: app.workspace === null || app.workspace === undefined
+        ? "" : workspaceRef(app.workspace),
+      x: asPixels(w.x), y: asPixels(w.y),
+      width: asPixels(w.width), height: asPixels(w.height)
+    })
   }
 
-  apps.sort(function(a, b) {
-    var aw = a.workspace === null ? Infinity : Number(a.workspace)
-    var bw = b.workspace === null ? Infinity : Number(b.workspace)
-    if (isFinite(aw) && isFinite(bw) && aw !== bw) return aw - bw
-    return applicationLabel(a).toLowerCase() < applicationLabel(b).toLowerCase() ? -1 : 1
-  })
+  var layouts = captureLayouts(placements)
+
+  // The panes read in order and so does everything the mode opens, so the
+  // launch list is put in the order the board reads rather than the order
+  // Hyprland happened to list its clients in.
+  var known = Object.create(null)
+  for (i = 0; i < apps.length; i++) known["u:" + apps[i].uid] = apps[i]
+  var ordered = []
+  for (i = 0; i < layouts.length; i++) {
+    var uids = paneApps(layouts[i].tree, [])
+    for (var u = 0; u < uids.length; u++)
+      if (known["u:" + uids[u]]) ordered.push(known["u:" + uids[u]])
+  }
+  for (i = 0; i < apps.length; i++)
+    if (ordered.indexOf(apps[i]) === -1) ordered.push(apps[i])
 
   return {
     name: asString(s.name, "").trim() || "Current desktop",
     description: asString(s.description, "").trim(),
-    workspaces: { target: asWorkspace(s.workspace) },
+    workspaces: { target: asWorkspace(s.workspace), layouts: layouts },
     notifications: { dnd: asTristate(s.dnd) },
     audio: { output: asString(s.audioOutput, "").trim() || null },
     appearance: {
       wallpaper: asString(s.wallpaper, "").trim() || null,
       theme: asString(s.theme, "").trim() || null
     },
-    applications: apps,
+    applications: ordered,
     commands: { onActivate: [], onDeactivate: [] },
     triggers: []
   }
@@ -1893,6 +2043,7 @@ if (typeof module !== "undefined" && module.exports) {
     triggerMatches: triggerMatches,
     evaluateTrigger: evaluateTrigger,
     captureMode: captureMode,
+    paneTreeFromRects: paneTreeFromRects,
     captureArguments: captureArguments,
     captureDirectory: captureDirectory,
     Glyph: Glyph,

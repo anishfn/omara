@@ -229,6 +229,113 @@ Item {
     canvas.hoverPath = ""
   }
 
+  // ---------------------------------------------------------------- keyboard
+  //
+  // The board used to be pointer-only — panes, tabs, dividers and the
+  // split/close controls all needed a mouse, and the list-and-fields form this
+  // replaced was fully tabbable. Tab reaches the board, the arrows walk the
+  // panes, Enter fills or edits the one you are on, Delete closes it, and
+  // Ctrl with an arrow splits it the way that arrow points.
+
+  function paneByPath(path) {
+    var panes = canvas.rects.panes
+    for (var i = 0; i < panes.length; i++)
+      if (panes[i].path === path) return panes[i]
+    return null
+  }
+
+  function currentPane() {
+    var here = canvas.paneByPath(canvas.selectedPath)
+    if (here) return here
+    var panes = canvas.rects.panes
+    return panes.length > 0 ? panes[0] : null
+  }
+
+  // The nearest pane whose centre lies the way the arrow points. Geometric
+  // rather than tree order: what the eye is asking for is the pane beside this
+  // one, not its sibling in the split, and on a grid those differ.
+  function paneToward(from, dx, dy) {
+    if (!from) return null
+    var panes = canvas.rects.panes
+    var fx = from.x + from.width / 2
+    var fy = from.y + from.height / 2
+    var best = null
+    var bestScore = Infinity
+    for (var i = 0; i < panes.length; i++) {
+      var p = panes[i]
+      if (p.path === from.path) continue
+      var px = p.x + p.width / 2
+      var py = p.y + p.height / 2
+      var along = (px - fx) * dx + (py - fy) * dy
+      if (along <= 0) continue
+      // Sideways drift costs double, so a pane straight ahead wins over a
+      // nearer one off to the side.
+      var across = Math.abs((px - fx) * dy + (py - fy) * dx)
+      var score = along + across * 2
+      if (score >= bestScore) continue
+      bestScore = score
+      best = p
+    }
+    return best
+  }
+
+  function moveSelection(dx, dy) {
+    var from = canvas.currentPane()
+    if (!from) return
+    var next = canvas.paneToward(from, dx, dy)
+    canvas.selectedPath = next ? next.path : from.path
+  }
+
+  // Enter on a pane with a box goes into the box; on one without, it asks what
+  // the pane should hold.
+  function enterPane() {
+    var here = canvas.currentPane()
+    if (!here) return
+    canvas.selectedPath = here.path
+    if (here.app !== "") {
+      for (var i = 0; i < paneRepeater.count; i++) {
+        var item = paneRepeater.itemAt(i)
+        if (item && item.modelData.path === here.path && item.focusField()) return
+      }
+      return
+    }
+    canvas.editor.openAppPicker(canvas.tab, here.path)
+  }
+
+  function handleBoardKey(event) {
+    if (event.modifiers & Qt.AltModifier) return
+    var ctrl = (event.modifiers & Qt.ControlModifier) !== 0
+    var here = canvas.currentPane()
+
+    if (ctrl) {
+      if (!here || here.app === "") return
+      if (event.key === Qt.Key_Right || event.key === Qt.Key_Left) {
+        canvas.editor.splitPane(canvas.tab, here.path, "row")
+        event.accepted = true
+      } else if (event.key === Qt.Key_Down || event.key === Qt.Key_Up) {
+        canvas.editor.splitPane(canvas.tab, here.path, "column")
+        event.accepted = true
+      }
+      return
+    }
+
+    if (event.key === Qt.Key_Left) { canvas.moveSelection(-1, 0); event.accepted = true }
+    else if (event.key === Qt.Key_Right) { canvas.moveSelection(1, 0); event.accepted = true }
+    else if (event.key === Qt.Key_Up) { canvas.moveSelection(0, -1); event.accepted = true }
+    else if (event.key === Qt.Key_Down) { canvas.moveSelection(0, 1); event.accepted = true }
+    else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter || event.key === Qt.Key_Space) {
+      canvas.enterPane()
+      event.accepted = true
+    } else if (event.key === Qt.Key_Delete || event.key === Qt.Key_Backspace) {
+      if (!here) return
+      // The last empty pane is the whole board; there is nothing to close.
+      if (here.app === "" && canvas.rects.panes.length <= 1) return
+      canvas.selectedPath = ""
+      canvas.editor.closePane(canvas.tab, here.path)
+      event.accepted = true
+    }
+  }
+
   // ------------------------------------------------------------------ adding
 
   function addEntry(entry) {
@@ -304,6 +411,11 @@ Item {
               : "Click again to rename  ·  drag to reorder"
             Accessible.name: modelData.workspace === "" ? "Any workspace" : "Workspace " + modelData.workspace
             Accessible.onPressAction: canvas.tab = cell.index
+            // focusable wires Return, Enter and Space to clicked(), and nothing
+            // was listening: a tab could be tabbed to and then not opened.
+            // The pointer never gets here — tabMouse is above this — so this
+            // is the keyboard's path and only the keyboard's.
+            onClicked: canvas.tab = cell.index
 
             Rectangle {
               visible: cell.isLanding
@@ -466,7 +578,7 @@ Item {
         bordered: true
         onClicked: {
           canvas.renaming = -1
-          canvas.editor.removeWorkspace(canvas.tab)
+          canvas.editor.requestRemoveWorkspace(canvas.tab)
         }
       }
 
@@ -493,6 +605,20 @@ Item {
           foreground: canvas.foreground
           Accessible.name: "Search installed applications"
           onTextChanged: canvas.query = text
+
+          // Escape belongs to the query while there is one. Only an empty
+          // field lets it through to close the panel.
+          Keys.onEscapePressed: function(event) {
+            if (text === "") return
+            text = ""
+            event.accepted = true
+          }
+
+          Keys.onDownPressed: function(event) {
+            appList.currentIndex = 0
+            appList.forceActiveFocus()
+            event.accepted = true
+          }
         }
 
         ListView {
@@ -504,10 +630,30 @@ Item {
           boundsBehavior: Flickable.StopAtBounds
           model: canvas.appLibrary ? canvas.appLibrary.sortedEntries(canvas.query) : []
 
+          // The rows were not reachable without a pointer either. Up and Down
+          // walk them, Enter puts one in the pane you have picked.
+          activeFocusOnTab: true
+          currentIndex: -1
+          highlightMoveDuration: 0
+          Accessible.role: Accessible.List
+          Accessible.name: "Installed applications"
+
+          function addCurrent() {
+            var item = appList.itemAtIndex(appList.currentIndex)
+            if (item && item.entry) canvas.addEntry(item.entry)
+          }
+
+          Keys.onReturnPressed: appList.addCurrent()
+          Keys.onEnterPressed: appList.addCurrent()
+
+          onActiveFocusChanged: if (activeFocus && currentIndex < 0 && count > 0) currentIndex = 0
+
           delegate: Item {
             id: appRow
             required property var modelData
+            required property int index
             readonly property var entry: modelData.entry
+            readonly property bool onCursor: appList.activeFocus && appList.currentIndex === appRow.index
 
             width: appList.width
             height: Style.space(30)
@@ -519,7 +665,7 @@ Item {
             Rectangle {
               anchors.fill: parent
               radius: Style.cornerRadius
-              color: appDrag.containsMouse
+              color: appDrag.containsMouse || appRow.onCursor
                 ? Style.hoverFillFor(canvas.foreground, Color.accent, Color.accent) : "transparent"
             }
 
@@ -557,7 +703,15 @@ Item {
               anchors.fill: parent
               hoverEnabled: true
               cursorShape: Qt.PointingHandCursor
-              preventStealing: true
+
+              // Claimed once the gesture has said what it is, not declared up
+              // front. Held from the press, this kept the ListView from ever
+              // seeing a flick, so the list could only be scrolled with a
+              // wheel — on a touchpad, a real loss. A gesture that sets off
+              // sideways is a drag onto the board and takes the grab; one that
+              // sets off downwards is the list being scrolled, and the
+              // ListView steals it back on its own.
+              preventStealing: false
 
               property real pressX: 0
               property real pressY: 0
@@ -572,7 +726,11 @@ Item {
               onPositionChanged: function(mouse) {
                 if (!appDrag.armed) return
                 if (!canvas.dragging) {
-                  if (Math.abs(mouse.x - appDrag.pressX) + Math.abs(mouse.y - appDrag.pressY) < Style.space(6)) return
+                  var dx = mouse.x - appDrag.pressX
+                  var dy = mouse.y - appDrag.pressY
+                  if (Math.abs(dx) + Math.abs(dy) < Style.space(6)) return
+                  if (Math.abs(dy) > Math.abs(dx)) return
+                  appDrag.preventStealing = true
                   canvas.startEntryDrag(appRow.entry)
                 }
                 var p = canvas.mapFromItem(appDrag, mouse.x, mouse.y)
@@ -589,10 +747,12 @@ Item {
                   canvas.addEntry(appRow.entry)
                 }
                 appDrag.armed = false
+                appDrag.preventStealing = false
               }
 
               onCanceled: {
                 appDrag.armed = false
+                appDrag.preventStealing = false
                 canvas.dragCancel()
               }
             }
@@ -607,11 +767,27 @@ Item {
         Layout.fillHeight: true
         radius: Style.cornerRadius
         // The panes are the objects. The board they sit on is only a region,
-        // so it draws nothing until there is something to catch.
+        // so it draws nothing until there is something to catch — except when
+        // it holds the keyboard, which is the one time the region itself is
+        // what you are pointed at.
         color: "transparent"
         border.width: Math.max(1, Style.normalBorderWidth)
-        border.color: Util.alpha(Color.accent, canvas.dragging ? 0.45 : 0)
+        border.color: activeFocus ? Util.alpha(Color.accent, 0.7)
+          : Util.alpha(Color.accent, canvas.dragging ? 0.45 : 0)
         Behavior on border.color { ColorAnimation { duration: 120 } }
+
+        activeFocusOnTab: true
+        Accessible.role: Accessible.Canvas
+        Accessible.name: "Workspace layout. Arrow keys move between panes, "
+          + "Enter fills one, Delete closes it, Ctrl with an arrow splits it."
+        Keys.onPressed: function(event) { canvas.handleBoardKey(event) }
+
+        // Tab lands on a board with nothing picked, and the arrows need
+        // somewhere to start from.
+        onActiveFocusChanged: if (activeFocus && canvas.selectedPath === "") {
+          var first = canvas.rects.panes.length > 0 ? canvas.rects.panes[0] : null
+          if (first) canvas.selectedPath = first.path
+        }
 
         Item {
           id: board
@@ -635,6 +811,8 @@ Item {
             property bool armed: false
 
             onPressed: function(mouse) {
+              // So the arrows work after a click, not only after a Tab.
+              boardFrame.forceActiveFocus()
               var pane = canvas.paneUnder(mouse.x, mouse.y)
               boardMouse.pressX = mouse.x
               boardMouse.pressY = mouse.y
@@ -683,11 +861,19 @@ Item {
 
           // ------------------------------------------------------- panes
           Repeater {
+            id: paneRepeater
             model: canvas.rects.panes.length
 
             Rectangle {
               id: pane
               required property int index
+
+              // How Enter on a focused board reaches the box in this pane.
+              function focusField() {
+                if (terminalField.visible) { terminalField.forceActiveFocus(); return true }
+                if (commandField.visible) { commandField.forceActiveFocus(); return true }
+                return false
+              }
 
               readonly property var modelData: canvas.paneRect(index)
               readonly property var app: canvas.editor.applicationByUid(modelData.app)
@@ -699,8 +885,15 @@ Item {
               // only once you have picked that pane and only where there is
               // room for a field to be a field. A board of unpicked panes
               // stays a board of names.
-              readonly property bool roomForFields: width > Style.space(150)
-                && height > Style.space(120)
+              //
+              // The room asked for is the room a box actually needs. It used
+              // to be 150x120, which is most of the board once a workspace is
+              // split three ways: the pane went on showing a name with no hint
+              // that there was anything to set and no way to reach it. Below
+              // the taller threshold the name gives up its line instead.
+              readonly property bool roomForFields: width > Style.space(104)
+                && height > Style.space(52)
+              readonly property bool roomForName: !editing || height > Style.space(96)
               // A terminal is asked what to run; a pane holding a raw command
               // is asked what that command is. A browser is asked nothing —
               // the application it names is the whole answer — so it never
@@ -784,6 +977,7 @@ Item {
 
                 Text {
                   width: parent.width
+                  visible: pane.roomForName
                   horizontalAlignment: Text.AlignHCenter
                   textFormat: Text.PlainText
                   text: canvas.editor.applicationName(pane.app)
@@ -814,14 +1008,17 @@ Item {
 
                 // A custom command is edited where it runs, not in a list
                 // somewhere else.
-                TextField {
+                EditField {
+                  id: commandField
                   width: parent.width
                   visible: pane.editing && !pane.app.desktopId
-                  text: pane.app ? String(pane.app.command || "") : ""
+                  committed: pane.app ? String(pane.app.command || "") : ""
                   placeholderText: "Command"
                   foreground: canvas.foreground
                   Accessible.name: "Application command"
-                  onEditingFinished: canvas.editor.setApplicationField(pane.modelData.app, "command", text)
+                  onCommit: function(value) {
+                    canvas.editor.setApplicationField(pane.modelData.app, "command", value)
+                  }
                 }
 
                 // A terminal pane is one question — what should this terminal
@@ -829,15 +1026,18 @@ Item {
                 // a whole answer to it. Splitting that into a flag to know and
                 // a folder to fill in separately was asking you to take your
                 // own sentence apart.
-                TextField {
+                EditField {
+                  id: terminalField
                   width: parent.width
                   visible: pane.editing && pane.terminal
-                  text: pane.app ? Model.terminalCommandOf(pane.app.args) : ""
+                  committed: pane.app ? Model.terminalCommandOf(pane.app.args) : ""
                   placeholderText: "Command, e.g. cd projects/app && claude"
                   foreground: canvas.foreground
                   Accessible.name: "Command to run in this terminal"
-                  onEditingFinished: canvas.editor.setApplicationField(pane.modelData.app, "args",
-                    Model.setTerminalCommand(pane.app.args, text))
+                  onCommit: function(value) {
+                    canvas.editor.setApplicationField(pane.modelData.app, "args",
+                      Model.setTerminalCommand(pane.app.args, value))
+                  }
                 }
               }
 
@@ -918,7 +1118,8 @@ Item {
                 preventStealing: true
                 cursorShape: modelData.direction === "row" ? Qt.SplitHCursor : Qt.SplitVCursor
                 Accessible.role: Accessible.Separator
-                Accessible.name: "Resize these panes"
+                Accessible.name: "Resize these panes. The shape is a plan; "
+                  + "Hyprland does the tiling."
 
                 onPositionChanged: function(mouse) {
                   if (!grip.pressed) return
@@ -941,12 +1142,21 @@ Item {
 
               readonly property var modelData: canvas.paneRect(index)
 
-              // Only on a pane with something in it: an empty pane has nothing
-              // to split, nothing to skip, and closing it is what dropping an
-              // application into it undoes anyway.
-              readonly property bool shown: !canvas.dragging && modelData.app !== ""
+              readonly property bool occupied: modelData.app !== ""
+
+              // An empty pane is a hole in the layout, and closing it is the
+              // only way to fill it in. It used to have no controls at all on
+              // the theory that dropping an application into it undid the
+              // split — which is backwards: split a pane, change your mind,
+              // and the empty half was permanent, saved into the mode with it.
+              //
+              // Splitting one is still not offered. Two empty panes are not an
+              // improvement on one.
+              readonly property bool shown: !canvas.dragging
+                && (occupied || canvas.rects.panes.length > 1)
                 && (canvas.selectedPath === modelData.path || canvas.pointerPath === modelData.path)
-                && modelData.width > Style.space(90) && modelData.height > Style.space(40)
+                && modelData.width > Style.space(occupied ? 90 : 34)
+                && modelData.height > Style.space(40)
 
               x: modelData.x + modelData.width - width - Style.space(6)
               y: modelData.y + Style.space(6)
@@ -954,6 +1164,7 @@ Item {
               spacing: Style.space(2)
 
               PanelActionButton {
+                visible: parent.occupied
                 iconText: Model.Glyph.splitVertical
                 tooltipText: "Split left and right"
                 size: Style.space(20)
@@ -964,6 +1175,7 @@ Item {
               }
 
               PanelActionButton {
+                visible: parent.occupied
                 iconText: Model.Glyph.splitHorizontal
                 tooltipText: "Split top and bottom"
                 size: Style.space(20)
@@ -975,7 +1187,8 @@ Item {
 
               PanelActionButton {
                 iconText: Model.Glyph.close
-                tooltipText: "Close this pane"
+                tooltipText: parent.occupied ? "Close this pane" : "Remove this empty pane"
+                Accessible.name: parent.occupied ? "Close this pane" : "Remove this empty pane"
                 size: Style.space(20)
                 fontSize: Style.font.caption
                 foreground: canvas.foreground
@@ -998,9 +1211,16 @@ Item {
       textFormat: Text.PlainText
       // The first clause is the one a new mode needs: the tabs are not a
       // toolbar, they are the workspaces this mode opens on.
+      //
+      // The second sentence is the one the board cannot say for itself. What
+      // a mode actually carries out of here is which workspace each
+      // application opens on and in what order; the tiling is Hyprland's. A
+      // draggable divider that quietly decided nothing was the panel making a
+      // promise the plugin does not keep.
       text: "Each tab is a workspace, drag one to reorder  ·  drag an app in "
         + "from the left  ·  drop one on a pane's edge to split it  ·  "
-        + "drag a divider to resize"
+        + "drag a divider to resize.  Panes set which workspace each app opens "
+        + "on and in what order — the tiling itself is Hyprland's."
       color: canvas.dim
       font.family: canvas.fontFamily
       font.pixelSize: Style.font.caption

@@ -1317,8 +1317,17 @@ Item {
     saveState()
   }
 
+  // The same guard activateMode has. Without it a deactivation could run
+  // during an activation's environment probe — up to 10s — restoring from
+  // previousState and clearing it, after which the activation still in flight
+  // wrote itself back as active over an empty snapshot. The desktop was then
+  // in the new mode with nothing to restore, and turning it off did nothing.
   function deactivateMode(options) {
     var opts = Model.isPlainObject(options) ? options : {}
+    if (service.activating) {
+      log("warn", "Ignored deactivation: an activation is in flight")
+      return false
+    }
     var ctx = service.activeMode
     var results = []
 
@@ -1405,10 +1414,21 @@ Item {
       // running and where from. A window that does not report one still
       // captures, just without those two answers.
       var pid = ipc && ipc.pid ? String(ipc.pid) : ""
+      // Where the window is, so a capture can rebuild the shape it was in
+      // rather than guessing a grid. A compositor that answers with neither
+      // simply captures the way it always did.
+      var at = ipc && Array.isArray(ipc.at) ? ipc.at : []
+      var size = ipc && Array.isArray(ipc.size) ? ipc.size : []
+      var rect = {
+        x: Number(at[0]) || 0, y: Number(at[1]) || 0,
+        width: Number(size[0]) || 0, height: Number(size[1]) || 0
+      }
       var entry = entryForWindowClass(cls)
       out.push(entry
-        ? { desktopId: String(entry.id), workspace: ws, title: title, pid: pid }
-        : { command: cls.toLowerCase(), workspace: ws, title: title, pid: pid })
+        ? { desktopId: String(entry.id), workspace: ws, title: title, pid: pid,
+            x: rect.x, y: rect.y, width: rect.width, height: rect.height }
+        : { command: cls.toLowerCase(), workspace: ws, title: title, pid: pid,
+            x: rect.x, y: rect.y, width: rect.width, height: rect.height })
     }
     return out
   }
@@ -1541,6 +1561,7 @@ Item {
     if (captureProcess.running || captureRefresh.running) return false
     service.captureName = String(name || "")
     service.captureSettled = false
+    service.captureResult = Model.emptyProbeResult()
     // A window opened since the last event Quickshell happened to see carries
     // an empty lastIpcObject, and a window with no class is one openWindows
     // skips — so the terminal you opened a moment ago, which is very likely
@@ -1586,11 +1607,17 @@ Item {
     service.finishCapture()
   }
 
+  // Its own result, never service.probeResult. Both processes used to assign
+  // that one property and neither excluded the other, so a capture running
+  // during an activation's probe could hand the activation its reading — and
+  // the snapshot kept for restore would be the capture's.
+  property var captureResult: Model.emptyProbeResult()
+
   Process {
     id: captureProcess
     stdout: StdioCollector {
       waitForEnd: true
-      onStreamFinished: service.probeResult = Model.parseProbeOutput(text)
+      onStreamFinished: service.captureResult = Model.parseProbeOutput(text)
     }
     onExited: service.settleCapture("")
   }
@@ -1610,7 +1637,7 @@ Item {
   // belongs to. A pid the probe could not read — another user's, or one that
   // exited mid-capture — simply contributes nothing.
   function capturedWindows() {
-    var processes = service.probeResult.processes || ({})
+    var processes = service.captureResult.processes || ({})
     var out = []
     for (var i = 0; i < service.captureWindows.length; i++) {
       var w = service.captureWindows[i]
@@ -1620,6 +1647,7 @@ Item {
         command: w.command,
         workspace: w.workspace,
         title: w.title,
+        x: w.x, y: w.y, width: w.width, height: w.height,
         args: proc ? Model.captureArguments(proc.argv, service.home) : "",
         directory: proc ? Model.captureDirectory(proc.cwd, service.home) : ""
       })
@@ -1635,12 +1663,13 @@ Item {
       workspace: focused && focused.id > 0 ? focused.id : null,
       dnd: currentDnd(),
       audioOutput: currentAudioOutput(),
-      wallpaper: service.probeResult.wallpaper,
-      theme: service.probeResult.theme,
+      wallpaper: service.captureResult.wallpaper,
+      theme: service.captureResult.theme,
       windows: capturedWindows()
     })
     service.captureName = ""
     service.captureWindows = []
+    service.captureResult = Model.emptyProbeResult()
 
     var id = createModeFrom(fields)
     log("info", "Captured " + fields.applications.length + " application(s) from the desktop")
@@ -1837,7 +1866,7 @@ Item {
     }
 
     function deactivate(): string {
-      return service.deactivateMode() ? "ok" : "error"
+      return service.deactivateMode() ? "ok" : "busy"
     }
 
     function edit(id: string): string {

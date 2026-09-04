@@ -73,6 +73,7 @@ Item {
   function openFor(modeId) {
     var id = String(modeId || "")
     root.opened = true
+    root.engaged = false
     if (id === "new") {
       createFromTemplate("blank")
     } else if (id !== "") {
@@ -89,6 +90,9 @@ Item {
 
   function close() {
     root.opened = false
+    root.engaged = false
+    root.pendingRemoval = -1
+    confirmRemoval.close()
     root.appPickerOpen = false
     root.iconPickerOpen = false
     root.themePickerOpen = false
@@ -134,6 +138,29 @@ Item {
     unsaved.close()
     Qt.callLater(function() { if (root.opened) keyCatcher.forceActiveFocus() })
   }
+
+  // Ctrl+S used to call saveDraft() straight out of the key handler. Every
+  // field in this plugin commits on editingFinished, so the box under the
+  // caret had not reached the draft yet: if the only change was what you had
+  // just typed, `dirty` was still false, nothing was saved, and the keystroke
+  // was swallowed. guard() already takes focus back for exactly this reason —
+  // saving goes through it too now, and finds nothing to ask about once the
+  // draft is clean.
+  function requestSave() {
+    guard(function() { if (root.dirty) root.saveDraft() })
+  }
+
+  // Whether this panel has been touched since it opened.
+  //
+  // A layer-shell overlay on the Overlay layer holds the keyboard for as long
+  // as it is up, so a panel opened programmatically while you are working
+  // elsewhere is delivered your typing — and Ctrl+N or Ctrl+D on it is enough
+  // to create or duplicate a mode you never asked for. Escape and Ctrl+S stay
+  // live because neither of them can invent or destroy anything; the shortcuts
+  // that change the set of modes wait for a pointer to say you are here.
+  //
+  // This is a mitigation, not the fix. See BUGS.md #0.
+  property bool engaged: false
 
   function requestClose() { guard(function() { root.close() }) }
   function requestSelect(id) { guard(function() { root.selectMode(id) }) }
@@ -181,7 +208,10 @@ Item {
     guard(function() {
       root.creating = true
       root.pane = "edit"
-      service.captureCurrentSetup("")
+      // Refused when a capture is already in flight, and saying so beats a
+      // button that looks broken.
+      if (!service.captureCurrentSetup(""))
+        service.log("warn", "A capture is already running; wait for it to finish")
       Qt.callLater(function() { root.creating = false })
     })
   }
@@ -256,26 +286,59 @@ Item {
     return -1
   }
 
+  // A write of the value already there is not an edit. Without this, selecting
+  // a terminal pane and clicking away — changing nothing — fired its field's
+  // editingFinished, rewrote args to the identical string, and left the mode
+  // marked unsaved, which meant a "Save your changes?" prompt for having
+  // looked at a pane.
   function setApplicationField(uid, field, value) {
     var index = applicationIndexByUid(uid)
     if (index === -1) return
+    if (draft.applications[index][field] === value) return
     var next = Model.clone(draft)
     next.applications[index][field] = value
     commitDraft(next)
   }
 
+  // Which tab the landing flag is on, by position rather than by the number
+  // that tab currently carries — because renumbering is about to change it.
+  function landingIndexOf(layouts, target) {
+    if (target === null || target === undefined) return -1
+    for (var i = 0; i < layouts.length; i++)
+      if (String(layouts[i].workspace) === String(target)) return i
+    return -1
+  }
+
+  // Numbered tabs are positions, so any change to the strip closes the numbers
+  // up again and the landing flag stays on the tab it was set on.
+  //
+  // Only moveWorkspace used to do this. Adding and removing did not, so
+  // deleting workspace 2 of `1 2 3` left a strip reading `1 3` — and then the
+  // next drag, of any tab at all, renumbered it to `1 2` and silently moved
+  // everything on 3 onto 2. Doing it on every change means the strip always
+  // reads 1, 2, 3 across and no single drag ever surprises you with a
+  // renumbering it did not cause.
+  function renumbered(next) {
+    var landing = root.landingIndexOf(next.workspaces.layouts, next.workspaces.target)
+    next.workspaces.layouts = Model.renumberLayouts(next.workspaces.layouts)
+    if (landing >= 0 && landing < next.workspaces.layouts.length)
+      next.workspaces.target = Model.asWorkspace(next.workspaces.layouts[landing].workspace)
+    return next
+  }
+
   // A workspace only exists here as a tab; it is created empty and named
-  // afterwards, the same way you would open one on the desktop.
+  // afterwards, the same way you would open one on the desktop. It takes the
+  // next number in the strip, which after renumbering is its position.
   function addWorkspace() {
     if (!draft || root.layouts.length >= Model.MAX_LAYOUTS) return -1
-    var taken = {}
-    for (var i = 0; i < root.layouts.length; i++) taken["w:" + root.layouts[i].workspace] = true
-    var n = 1
-    while (taken["w:" + n] && n < 100) n++
     var next = Model.clone(draft)
-    next.workspaces.layouts.push({ workspace: String(n), tree: Model.paneLeaf("") })
-    commitDraft(next)
-    return next.workspaces.layouts.length - 1
+    next.workspaces.layouts.push({
+      workspace: String(next.workspaces.layouts.length + 1),
+      tree: Model.paneLeaf("")
+    })
+    var index = next.workspaces.layouts.length - 1
+    commitDraft(root.renumbered(next))
+    return index
   }
 
   // Dragging a tab moves what is inside it, not the number on it. A numbered
@@ -296,20 +359,7 @@ Item {
     var next = Model.clone(draft)
     var moved = next.workspaces.layouts.splice(from, 1)[0]
     next.workspaces.layouts.splice(to, 0, moved)
-
-    var landing = -1
-    var target = next.workspaces.target
-    if (target !== null && target !== undefined) {
-      for (var i = 0; i < next.workspaces.layouts.length; i++) {
-        if (String(next.workspaces.layouts[i].workspace) === String(target)) { landing = i; break }
-      }
-    }
-
-    next.workspaces.layouts = Model.renumberLayouts(next.workspaces.layouts)
-    if (landing >= 0)
-      next.workspaces.target = Model.asWorkspace(next.workspaces.layouts[landing].workspace)
-
-    commitDraft(next)
+    commitDraft(root.renumbered(next))
   }
 
   // The applications in a removed workspace go with it. Leaving them behind
@@ -329,7 +379,41 @@ Item {
     next.applications = kept
     if (next.workspaces.target !== null && String(next.workspaces.target) === String(root.layouts[index].workspace))
       next.workspaces.target = null
-    commitDraft(next)
+    commitDraft(root.renumbered(next))
+  }
+
+  // How many applications a tab is holding, which is what makes removing it
+  // worth a question.
+  function workspaceLoad(index) {
+    if (index < 0 || index >= root.layouts.length) return 0
+    return Model.paneApps(root.layouts[index].tree, []).length
+  }
+
+  property int pendingRemoval: -1
+
+  // The bin takes a whole workspace and everything on it, in one click, next
+  // to the flag, with no undo anywhere in this editor. An empty tab is not
+  // worth a question; a tab with work on it is.
+  function requestRemoveWorkspace(index) {
+    if (!draft || index < 0 || index >= root.layouts.length) return
+    if (root.layouts.length <= 1) return
+    var load = root.workspaceLoad(index)
+    if (load === 0) { root.removeWorkspace(index); return }
+    root.pendingRemoval = index
+    var label = root.layouts[index].workspace === ""
+      ? "this workspace" : "workspace " + root.layouts[index].workspace
+    // Cancel first, because PromptDialog opens on its first choice and Enter
+    // takes it. The safe answer is the one a stray Return should land on.
+    confirmRemoval.open("Remove " + label + " and the "
+      + load + (load === 1 ? " app" : " apps") + " on it?", ["Cancel", "Remove"], 1)
+  }
+
+  function resolveRemoval(index) {
+    var target = root.pendingRemoval
+    root.pendingRemoval = -1
+    confirmRemoval.close()
+    if (index === 1 && target >= 0) root.removeWorkspace(target)
+    Qt.callLater(function() { if (root.opened) keyCatcher.forceActiveFocus() })
   }
 
   // Two tabs cannot name one workspace: the second would silently swallow the
@@ -389,15 +473,27 @@ Item {
   }
 
   // Shared by a drop from the picker and a drop from another pane.
+  //
+  // An occupied pane is never overwritten. Dropping or clicking into the
+  // middle of one used to call paneSetAppAt on it, which evicted whatever was
+  // there — the evicted application was not lost, reconcile gave it a pane of
+  // its own somewhere else on the board, but it moved somewhere you had not
+  // put it. It splits instead, which is what a tiling window manager does with
+  // a window opened onto another one, and both stay where you can see them.
   function paneInsert(tree, path, zone, uid) {
     var target = Model.paneAt(tree, path)
     if (!target || Model.isPaneSplit(target)) {
       var empty = Model.paneFirstEmpty(tree, "")
       return empty === null ? Model.paneAppend(tree, uid) : Model.paneSetAppAt(tree, empty, uid)
     }
-    if (target.app === "" || zone === "center") return Model.paneSetAppAt(tree, path, uid)
+    if (target.app === "") return Model.paneSetAppAt(tree, path, uid)
 
-    var direction = (zone === "top" || zone === "bottom") ? "column" : "row"
+    // The middle of an occupied pane has no side to it, so it splits the way
+    // paneAppend alternates — which is what keeps a run of applications
+    // landing as a grid rather than a row of slivers.
+    var direction = zone === "center"
+      ? (String(path || "").length % 2 === 0 ? "row" : "column")
+      : ((zone === "top" || zone === "bottom") ? "column" : "row")
     var split = Model.paneSplitAt(tree, path, direction)
     // The pane budget is spent. Take an empty pane if there is one and
     // otherwise hand the tree back untouched, so a full workspace refuses a
@@ -588,7 +684,14 @@ Item {
       if (!Model.isPlainObject(cursor[parts[i]])) cursor[parts[i]] = {}
       cursor = cursor[parts[i]]
     }
-    cursor[parts[parts.length - 1]] = value
+    var leaf = parts[parts.length - 1]
+    // Same rule as setApplicationField: a field that comes back with what it
+    // already held has not been edited, and saying it has costs a prompt.
+    // Only for scalars — a list or an object is compared by identity here and
+    // would never match.
+    var was = cursor[leaf]
+    if (was === value && (was === null || typeof was !== "object")) return
+    cursor[leaf] = value
     root.draft = next
     edited()
   }
@@ -636,17 +739,55 @@ Item {
     })
   }
 
-  function chooserCommand(argv) {
-    return ["bash", "-lc", 'exec "$@"', "bash"].concat(argv)
+  function exportFileName() {
+    var d = new Date()
+    function pad(n) { return (n < 10 ? "0" : "") + n }
+    return "omara-export-" + d.getFullYear() + pad(d.getMonth() + 1) + pad(d.getDate())
+      + "-" + pad(d.getHours()) + pad(d.getMinutes()) + pad(d.getSeconds()) + ".json"
   }
 
+  function chooserCommand(argv) {
+    return [root.service ? root.service.binBash : "/usr/bin/bash",
+      "-lc", 'exec "$@"', "bash"].concat(argv)
+  }
+
+  // Every other subprocess in this plugin runs bounded with a watchdog behind
+  // it; the three chooser launches did not. The editor's `visible` reads
+  // `suspended`, so a chooser that never exited — a wedged portal, a binary
+  // that blocks — left the editor gone, Escape not reaching it, and killing
+  // the shell the only way back.
+  readonly property int chooserDeadlineSec: 300
+
+  property var suspendedProcess: null
+
   function suspendFor(process, argv) {
-    process.command = chooserCommand(argv)
+    process.command = [root.service ? root.service.binTimeout : "/usr/bin/timeout",
+      "-k", "5", String(root.chooserDeadlineSec)].concat(chooserCommand(argv))
+    root.suspendedProcess = process
     root.suspended = true
     process.running = true
+    chooserWatchdog.restart()
+  }
+
+  Timer {
+    id: chooserWatchdog
+    // Past the deadline the timeout above has already had its chance. This is
+    // only here for the case where even that did not come back.
+    interval: (root.chooserDeadlineSec + 10) * 1000
+    repeat: false
+    onTriggered: {
+      var process = root.suspendedProcess
+      if (process && process.running) process.running = false
+      if (root.suspended && root.service)
+        root.service.log("warn", "The file chooser did not come back in "
+          + root.chooserDeadlineSec + "s; the panel is yours again")
+      root.resume()
+    }
   }
 
   function resume() {
+    chooserWatchdog.stop()
+    root.suspendedProcess = null
     root.suspended = false
     Qt.callLater(function() { if (root.opened) keyCatcher.forceActiveFocus() })
   }
@@ -739,11 +880,25 @@ Item {
 
   function confirmImport(how) {
     if (!service) return
-    service.importFromText(root.importText, how)
+    var result = service.importFromText(root.importText, how)
     root.importIncoming = []
     root.importText = ""
     root.pane = "edit"
-    if (modes.length > 0) selectMode(modes[modes.length - 1].id)
+    if (!result || !result.ok) return
+
+    // The result says which modes arrived; the end of the list only says which
+    // mode happens to be last. Importing as *replace* over ids that already
+    // exist appends nothing, so landing on modes[length - 1] meant landing on
+    // an unrelated mode and claiming it had just been imported.
+    var landed = (result.added && result.added.length > 0) ? result.added[0]
+      : ((result.replaced && result.replaced.length > 0) ? result.replaced[0] : "")
+    if (landed !== "") selectMode(landed)
+    else if (modes.length > 0) selectMode(modes[0].id)
+
+    var skipped = result.skipped ? result.skipped.length : 0
+    if (skipped > 0)
+      service.log("info", "Skipped " + skipped
+        + " mode(s) that were already here under the same id")
   }
 
   function exportAll() {
@@ -762,7 +917,10 @@ Item {
       onStreamFinished: {
         var dir = root.firstLine(text)
         if (dir === "" || !root.service) return
-        root.writeExport(dir + "/omara-export.json", root.service.exportText(null))
+        // Stamped, not fixed. The chooser hands back a folder and never a
+        // name, so a second export to the same folder used to replace the
+        // first without asking and without saying so.
+        root.writeExport(dir + "/" + root.exportFileName(), root.service.exportText(null))
       }
     }
   }
@@ -812,7 +970,11 @@ Item {
       color: Util.alpha(Color.background, 0.72)
       MouseArea {
         anchors.fill: parent
-        onClicked: if (!root.appPickerOpen && !root.iconPickerOpen && !root.themePickerOpen && !unsaved.opened) root.requestClose()
+        onClicked: {
+          root.engaged = true
+          if (!root.appPickerOpen && !root.iconPickerOpen && !root.themePickerOpen
+            && !unsaved.opened && !confirmRemoval.opened) root.requestClose()
+        }
       }
     }
 
@@ -825,6 +987,7 @@ Item {
         if (root.appPickerOpen) root.appPickerOpen = false
         else if (root.iconPickerOpen) root.iconPickerOpen = false
         else if (root.themePickerOpen) root.themePickerOpen = false
+        else if (confirmRemoval.opened) root.resolveRemoval(0)
         else if (unsaved.opened) root.cancelGuard()
         else root.requestClose()
       }
@@ -843,19 +1006,19 @@ Item {
       Keys.onPressed: function(event) {
         // Alt+Up/Down reorders the selected mode, the keyboard equivalent of
         // the arrows that appear on a hovered row.
-        if ((event.modifiers & Qt.AltModifier) && root.selectedId !== "") {
+        if ((event.modifiers & Qt.AltModifier) && root.selectedId !== "" && root.engaged) {
           if (event.key === Qt.Key_Up) { root.moveSelected(-1); event.accepted = true; return }
           if (event.key === Qt.Key_Down) { root.moveSelected(1); event.accepted = true; return }
         }
         if (!(event.modifiers & Qt.ControlModifier)) return
         if (event.key === Qt.Key_S) {
-          if (root.pane === "edit" && root.dirty) root.saveDraft()
+          root.requestSave()
           event.accepted = true
         } else if (event.key === Qt.Key_N) {
-          root.requestCreateMode()
+          if (root.engaged) root.requestCreateMode()
           event.accepted = true
         } else if (event.key === Qt.Key_D && root.draft) {
-          root.duplicateSelected()
+          if (root.engaged) root.duplicateSelected()
           event.accepted = true
         }
       }
@@ -876,7 +1039,19 @@ Item {
         border.width: Math.max(1, Style.normalBorderWidth)
         border.color: Color.popups.border
 
-        MouseArea { anchors.fill: parent; onClicked: {} }
+        MouseArea {
+          anchors.fill: parent
+          onPressed: root.engaged = true
+          onClicked: {}
+        }
+
+        // What says you are actually at this panel rather than typing into
+        // something else while it sits open. Movement, not merely being under
+        // the pointer: a panel that opened beneath a stationary cursor has not
+        // been touched. Passive, so it never takes an event from a control.
+        HoverHandler {
+          onPointChanged: root.engaged = true
+        }
 
         ColumnLayout {
           anchors.fill: parent
@@ -992,14 +1167,18 @@ Item {
               onClicked: root.pane = root.pane === "options" ? "edit" : "options"
             }
 
+            // Called "Test" until it was pointed out that it is not one: it
+            // saves, closes the panel, and puts the desktop into the mode.
+            // There is no way to try a mode without committing to it, so the
+            // button says the word the rest of the plugin uses for that.
             Button {
-              text: "Test"
+              text: "Activate"
               visible: root.draft !== null
               focusable: true
               foreground: root.foreground
               fontFamily: root.fontFamily
               tooltipText: "Save, close, and switch to this mode now"
-              Accessible.name: "Try this mode now"
+              Accessible.name: "Save and switch to this mode now"
               onClicked: root.testDraft()
             }
 
@@ -1457,6 +1636,17 @@ Item {
               onClicked: root.requestPane(root.pane === "settings" ? "edit" : "settings")
             }
           }
+        }
+
+        PromptDialog {
+          id: confirmRemoval
+          anchors.fill: parent
+          z: 10
+          foreground: root.foreground
+          background: root.background
+          fontFamily: root.fontFamily
+          onChosen: function(index) { root.resolveRemoval(index) }
+          onDismissed: root.resolveRemoval(0)
         }
 
         PromptDialog {

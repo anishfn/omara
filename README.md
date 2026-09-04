@@ -256,7 +256,7 @@ mode opens is the part you actually edit.
 | **+** | A new, empty mode. No screen in between. |
 | **Camera** | A mode made out of the desktop as it is now |
 | **Options** | Name, icon, environment, commands, triggers — and Duplicate and Delete |
-| **Test** | Save, close, and switch to this mode, so you can see it |
+| **Activate** | Save, close, and switch to this mode now |
 | **Save** | Nothing is written until you press it |
 
 Leaving with unsaved changes asks first, so nothing is lost by accident.
@@ -266,12 +266,20 @@ changed and the behavior switches that apply to all of them.
 
 | Shortcut | |
 |---|---|
-| `Tab` | Jump into Options, then move field to field |
+| `Tab` | Move through the panel: the tabs, the app list, the board, then Options |
+| `←` `→` `↑` `↓` | On the board, move to the pane that way |
+| `Enter` | Fill the pane you are on, or step into its box |
+| `Delete` | Close the pane you are on |
+| `Ctrl` + arrow | Split the pane you are on, the way the arrow points |
 | `Ctrl+S` | Save |
 | `Ctrl+N` | New mode |
 | `Ctrl+D` | Duplicate the selected mode |
 | `Alt+↑` / `Alt+↓` | Move the selected mode up or down |
-| `Esc` | Close, or back out of a picker |
+| `Esc` | Abandon the field you are in, then close |
+
+`Ctrl+N`, `Ctrl+D` and `Alt`+arrow do nothing until the pointer has moved over
+the panel. A layer-shell overlay is delivered keys meant for other windows, and
+those three are the ones that can invent or destroy a mode; see `BUGS.md` #0.
 
 ### Capture the desktop
 
@@ -279,6 +287,7 @@ changed and the behavior switches that apply to all of them.
 typing. It records:
 
 - every open window, matched to its installed application, with the workspace it is on
+- where each window sits, so the panes come back in the shape they were in
 - what each window was actually started with, and the folder it is sitting in
 - the workspace you are looking at, as where the mode leaves you
 - the current Do Not Disturb state, audio output, wallpaper, and theme
@@ -286,8 +295,15 @@ typing. It records:
 The second line is what makes a capture worth taking rather than rebuilding by
 hand. A terminal running `btop` captures as `foot -e btop`; a terminal opened in
 `~/Projects` captures with that folder; a browser on a page captures with the
-URL. Two terminals side by side, one running something and one just sitting in
-a folder, capture as two panes rather than collapsing into one.
+URL.
+
+One window is one pane, always. Two terminals side by side capture as two panes
+even when they are running the same nothing, because what tells them apart is
+where they are — and where they are is what the board is for. Capture reads
+each window's position and rebuilds the splits from it: a line with every window
+cleanly on one side of it is a split, and where it fell is the ratio. Windows
+piled on top of one another are not a set of cuts, so they arrive as panes
+without a shape rather than as one pane.
 
 Both come from `/proc`, which only answers about your own processes — a window
 belonging to something else captures by name alone. What lands on the pane is
@@ -296,8 +312,8 @@ filtered, not raw: a URL, a file you opened, or everything after a terminal's
 That heuristic is a guess. Read the panes before you save.
 
 The editor opens on the result straight away, because a capture is a starting
-point rather than a finished mode. Two Firefox windows on two workspaces
-capture as two panes, so close the one you did not mean. If the current wallpaper
+point rather than a finished mode. Two Firefox windows capture as two panes, so
+close the one you did not mean. If the current wallpaper
 or Do Not Disturb state is not something you want this mode forcing, set
 those fields back to *Leave unchanged*.
 
@@ -427,12 +443,12 @@ Each tab is one workspace. A pane is one application.
 
 | To | Do |
 |---|---|
-| Add an application | Drag it in from the left, click an empty pane, or click it in the list to fill the selected pane |
+| Add an application | Drag it in from the left, click an empty pane, or click it in the list to fill the selected pane. A pane that already holds something splits rather than giving it up |
 | Split a pane | Drop an application on the pane's edge, or use the split buttons on it |
 | Move an application | Drag its pane onto another pane, or onto another workspace's tab |
 | Swap two applications | Drag one pane onto the other |
 | Resize | Drag the divider between two panes |
-| Remove one | The × on the pane |
+| Remove one | The × on the pane — including an empty one, so a split you changed your mind about goes away |
 | Reorder workspaces | Drag a tab left or right; the contents move, the numbers stay in place |
 | See what is in one | The count on a tab is how many applications that workspace opens |
 
@@ -461,7 +477,10 @@ What the canvas controls is *which workspace* each application opens on and
 is the order things start. The tiling itself is Hyprland's, so the shape you
 draw is a plan rather than a guarantee: a two-pane row of Ghostty and Firefox
 opens Ghostty first and Firefox second, on that workspace, and your layout
-rules do the rest.
+rules do the rest. The divider you drag is saved with the mode and read back by
+the editor; nothing hands it to the compositor. The line under the board says
+as much, because a draggable divider that quietly decided nothing was the panel
+making a promise on the plugin's behalf that the plugin does not keep.
 
 Applications are placed using Hyprland's own placement rules, so nothing drags
 your focus around while a mode starts up. Named workspaces work as well as
@@ -662,7 +681,8 @@ WARN  Activated Coding with 1 warning(s)
 
 ## Import and export
 
-**Export** writes `omara-export.json` to a folder you pick, or prints one
+**Export** writes `omara-export-<date>-<time>.json` to a folder you pick — the
+stamp is there so a second export does not replace the first — or prints one
 mode to stdout:
 
 ```bash

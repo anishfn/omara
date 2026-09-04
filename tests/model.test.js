@@ -652,15 +652,22 @@ test("a capture becomes a mode, sorted by workspace", () => {
   assert.deepEqual(captured.applications.map(a => a.workspace), [1, 2, null])
 })
 
-test("two windows of the same app on one workspace capture as one entry", () => {
+test("two windows of the same app on one workspace capture as two panes", () => {
+  // They used to collapse into one entry, which is what a flat application
+  // list had to do. On a canvas it is simply wrong: two bare terminals side by
+  // side have nothing to tell them apart but where they are, and where they
+  // are is exactly what the board is for.
   const captured = Model.captureMode({
     windows: [
-      { desktopId: "term", workspace: 1 },
-      { desktopId: "term", workspace: 1 },
-      { desktopId: "term", workspace: 2 }
+      { desktopId: "term", workspace: 1, x: 0, y: 0, width: 950, height: 1080 },
+      { desktopId: "term", workspace: 1, x: 960, y: 0, width: 950, height: 1080 },
+      { desktopId: "term", workspace: 2, x: 0, y: 0, width: 1920, height: 1080 }
     ]
   })
-  assert.deepEqual(captured.applications.map(a => a.workspace), [1, 2])
+  assert.deepEqual(captured.applications.map(a => a.workspace), [1, 1, 2])
+  const first = captured.workspaces.layouts.find(l => l.workspace === "1")
+  assert.equal(Model.paneApps(first.tree, []).length, 2)
+  assert.equal(first.tree.split, "row")
 })
 
 test("a folder is stored the way you would type it, and expanded once", () => {
@@ -784,18 +791,75 @@ test("a process's command line survives the probe's tab-separated line", () => {
     undefined)
 })
 
-test("two terminals running different things capture as two entries", () => {
+test("what a terminal is running rides through capture with it", () => {
   const captured = Model.captureMode({
     windows: [
       { desktopId: "foot", workspace: 1, args: "-e btop" },
       { desktopId: "foot", workspace: 1, directory: "~/Projects" },
-      // Same app, same workspace, same command: still one entry.
+      // Identical to the first, and still its own pane.
       { desktopId: "foot", workspace: 1, args: "-e btop" }
     ]
   })
-  assert.equal(captured.applications.length, 2)
-  assert.deepEqual(captured.applications.map(a => a.args), ["-e btop", ""])
-  assert.deepEqual(captured.applications.map(a => a.directory), ["", "~/Projects"])
+  assert.equal(captured.applications.length, 3)
+  assert.deepEqual(captured.applications.map(a => a.args), ["-e btop", "", "-e btop"])
+  assert.deepEqual(captured.applications.map(a => a.directory), ["", "~/Projects", ""])
+})
+
+test("capture rebuilds the shape the windows were actually in", () => {
+  // A tiling layout is a series of straight cuts, so a line with every window
+  // cleanly on one side of it is a split and where it fell is the ratio.
+  const grid = Model.paneTreeFromRects([
+    { uid: "p1", x: 0, y: 0, width: 950, height: 530 },
+    { uid: "p2", x: 960, y: 0, width: 950, height: 530 },
+    { uid: "p3", x: 0, y: 540, width: 950, height: 530 },
+    { uid: "p4", x: 960, y: 540, width: 950, height: 530 }
+  ])
+  assert.equal(grid.split, "row")
+  assert.equal(grid.children[0].split, "column")
+  assert.deepEqual(Model.paneApps(grid, []), ["p1", "p3", "p2", "p4"])
+
+  // One wide window on the left, two stacked on the right.
+  const dwindle = Model.paneTreeFromRects([
+    { uid: "p1", x: 0, y: 0, width: 950, height: 1080 },
+    { uid: "p2", x: 960, y: 0, width: 950, height: 530 },
+    { uid: "p3", x: 960, y: 540, width: 950, height: 530 }
+  ])
+  assert.equal(dwindle.split, "row")
+  assert.equal(dwindle.children[0].app, "p1")
+  assert.equal(dwindle.children[1].split, "column")
+
+  // Windows on top of one another are not a set of cuts, and still arrive as
+  // panes rather than as one of them.
+  const stacked = Model.paneTreeFromRects([
+    { uid: "p1", x: 0, y: 0, width: 800, height: 600 },
+    { uid: "p2", x: 10, y: 10, width: 800, height: 600 }
+  ])
+  assert.deepEqual(Model.paneApps(stacked, []).sort(), ["p1", "p2"])
+})
+
+test("a capture with no geometry to read is the grid it always was", () => {
+  const tree = Model.paneTreeFromRects([
+    { uid: "p1", x: 0, y: 0, width: 0, height: 0 },
+    { uid: "p2", x: 0, y: 0, width: 0, height: 0 },
+    { uid: "p3", x: 0, y: 0, width: 0, height: 0 }
+  ])
+  let grown = Model.paneLeaf("")
+  for (const uid of ["p1", "p2", "p3"]) grown = Model.paneAppend(grown, uid)
+  assert.deepEqual(tree, grown)
+})
+
+test("a layout too deep to keep gives up its shape, never its applications", () => {
+  // normalizePaneNode used to read `app` off a split node past the depth
+  // limit, which is always undefined, so the whole subtree vanished.
+  let deep = Model.paneLeaf("p9")
+  for (let i = 0; i < 10; i++) deep = { split: "row", ratio: 0.5, children: [deep, Model.paneLeaf("")] }
+  const mode = Model.normalizeMode({
+    id: "m", name: "M",
+    applications: [{ uid: "p9", desktopId: "firefox", workspace: 1 }],
+    workspaces: { target: null, layouts: [{ workspace: "1", tree: deep }] }
+  }, [])
+  assert.equal(mode.applications.length, 1)
+  assert.deepEqual(Model.paneApps(mode.workspaces.layouts[0].tree, []), ["p9"])
 })
 
 test("an empty desktop captures as an empty, still-valid mode", () => {
@@ -1760,12 +1824,18 @@ test("a numbered workspace tab is a position, not a label", () => {
 
 test("moving a workspace moves what is in it, not the number on it", () => {
   const qml = read("EditorWindow.qml")
-  // The drag must renumber, or the strip reads 2, 1, 3 afterwards and no
-  // number on screen says which workspace anything opens on any more.
-  assert.match(qml, /function moveWorkspace[\s\S]*?Model\.renumberLayouts\(/)
-  // And it must put the landing flag back, because the workspace it pointed
-  // at has almost certainly just been renumbered underneath it.
-  assert.match(qml, /function moveWorkspace[\s\S]*?workspaces\.target = Model\.asWorkspace\(/)
+  // One renumbering, shared. It must put the landing flag back, because the
+  // workspace it pointed at has almost certainly just been renumbered
+  // underneath it.
+  assert.match(qml, /function renumbered\(next\)[\s\S]*?Model\.renumberLayouts\(/)
+  assert.match(qml, /function renumbered\(next\)[\s\S]*?workspaces\.target = Model\.asWorkspace\(/)
+
+  // Every change to the strip goes through it. Only the drag used to, so
+  // deleting workspace 2 of `1 2 3` left a strip reading `1 3`, and the next
+  // drag of any tab at all renumbered 3 to 2 and moved everything on it.
+  for (const fn of ["addWorkspace", "moveWorkspace", "removeWorkspace"])
+    assert.match(qml, new RegExp("function " + fn + "\\([\\s\\S]*?root\\.renumbered\\(next\\)"),
+      fn + " must leave the numbered tabs reading in order")
 })
 
 test("a workspace tab says what is in it", () => {
@@ -1844,5 +1914,209 @@ test("no overlay keeps the keyboard once it has focus", () => {
     // Nothing may pin it open-endedly.
     assert.doesNotMatch(qml, /keyboardFocus: WlrKeyboardFocus\.Exclusive/,
       `${file} must not hold Exclusive unconditionally`)
+  }
+})
+
+test("a renamed copy is clamped like every other string in the file", () => {
+  // The suffix used to be appended after normalizeMode had already clamped
+  // the name, which is the one way a string in the config got past MAX_STRING.
+  const long = "x".repeat(2048)
+  const config = Model.defaultConfig()
+  const seeded = Model.importModes(config, [Model.normalizeMode({ id: "m", name: long }, [])], "copy")
+  const twice = Model.importModes(seeded.config, [Model.normalizeMode({ id: "m", name: long }, [])], "copy")
+  for (const mode of twice.config.modes)
+    assert.ok(mode.name.length <= 2048, `name ran to ${mode.name.length}`)
+})
+
+test("an empty pane can be closed", () => {
+  const qml = read("WorkspaceCanvas.qml")
+  // The controls used to be gated on the pane holding something, so a split
+  // you changed your mind about was permanent — and saved into the mode.
+  assert.doesNotMatch(qml, /readonly property bool shown: !canvas\.dragging && modelData\.app !== ""/)
+  assert.match(qml, /readonly property bool shown: !canvas\.dragging\s*\n\s*&& \(occupied \|\| canvas\.rects\.panes\.length > 1\)/)
+  // Splitting one is still not offered: two empty panes are not an improvement.
+  assert.match(qml, /visible: parent\.occupied[\s\S]*?Glyph\.splitVertical/)
+  assert.match(qml, /Glyph\.close[\s\S]*?Remove this empty pane/)
+})
+
+test("a field re-syncs when its delegate is pointed somewhere else", () => {
+  // Typing breaks the binding on `text`, and the pane Repeaters are modelled
+  // on a count so their delegates outlive a change to the tree. A field whose
+  // binding had been broken went on showing — and committing — text belonging
+  // to a pane it was no longer drawing.
+  const field = read("EditField.qml")
+  assert.match(field, /onCommittedChanged: if \(text !== committed\) text = committed/)
+  assert.match(field, /onEditingFinished: if \(text !== committed\) field\.commit\(text\)/)
+  // Escape belongs to the field, not to the overlay behind it.
+  assert.match(field, /Keys\.onEscapePressed[\s\S]*?text = committed/)
+
+  // Nothing that edits a draft may go back to a bare TextField.
+  for (const file of ["WorkspaceCanvas.qml", "ModeForm.qml"]) {
+    const qml = read(file)
+    assert.doesNotMatch(qml, /TextField \{[^}]*onEditingFinished: \w+\.editor\./,
+      `${file} still commits from a plain TextField`)
+    assert.match(qml, /EditField \{/, `${file} must use EditField`)
+  }
+})
+
+test("saving commits the field under the caret first", () => {
+  const qml = read("EditorWindow.qml")
+  // Ctrl+S used to call saveDraft() straight out of the key handler, so the
+  // box you had just typed into had not reached the draft: dirty was still
+  // false, nothing was saved, and the keystroke was swallowed.
+  assert.match(qml, /Qt\.Key_S\) \{\s*\n\s*root\.requestSave\(\)/)
+  assert.match(qml, /function requestSave\(\)[\s\S]*?guard\(function/)
+})
+
+test("visiting a field without changing it does not mark a mode unsaved", () => {
+  const qml = read("EditorWindow.qml")
+  assert.match(qml, /function setApplicationField[\s\S]*?if \(draft\.applications\[index\]\[field\] === value\) return/)
+  assert.match(qml, /function setDraft[\s\S]*?if \(was === value &&/)
+})
+
+test("a pane with something in it is never overwritten", () => {
+  const qml = read("EditorWindow.qml")
+  // The middle of an occupied pane used to call paneSetAppAt on it, evicting
+  // whatever was there to somewhere else on the board.
+  assert.doesNotMatch(qml, /if \(target\.app === "" \|\| zone === "center"\)/)
+  assert.match(qml, /if \(target\.app === ""\) return Model\.paneSetAppAt/)
+  assert.match(qml, /var direction = zone === "center"/)
+})
+
+test("removing a workspace with work on it asks first", () => {
+  const qml = read("WorkspaceCanvas.qml")
+  assert.match(qml, /onClicked: \{[\s\S]*?canvas\.editor\.requestRemoveWorkspace\(canvas\.tab\)/)
+  const editor = read("EditorWindow.qml")
+  assert.match(editor, /function requestRemoveWorkspace/)
+  // An empty tab is not worth a question.
+  assert.match(editor, /if \(load === 0\) \{ root\.removeWorkspace\(index\); return \}/)
+  // Cancel first, because the dialog opens on its first choice and Enter takes it.
+  assert.match(editor, /\["Cancel", "Remove"\], 1\)/)
+})
+
+test("the board and the application list answer the keyboard", () => {
+  const qml = read("WorkspaceCanvas.qml")
+  assert.match(qml, /activeFocusOnTab: true/)
+  assert.match(qml, /Keys\.onPressed: function\(event\) \{ canvas\.handleBoardKey\(event\) \}/)
+  for (const fn of ["paneToward", "moveSelection", "enterPane", "handleBoardKey"])
+    assert.match(qml, new RegExp("function " + fn + "\\("), "missing " + fn)
+  assert.match(qml, /Qt\.Key_Delete/)
+  // A tab that can be tabbed to must be openable from there.
+  assert.match(qml, /onClicked: canvas\.tab = cell\.index/)
+  // And the rows in the list.
+  assert.match(qml, /function addCurrent\(\)/)
+  assert.match(qml, /Keys\.onReturnPressed: appList\.addCurrent\(\)/)
+})
+
+test("the application list can still be dragged to scroll", () => {
+  const qml = read("WorkspaceCanvas.qml")
+  // Held from the press, preventStealing kept the ListView from ever seeing a
+  // flick. It is claimed once the gesture has said it is going sideways.
+  const drag = qml.slice(qml.indexOf("id: appDrag"))
+  assert.match(drag, /preventStealing: false/)
+  assert.match(drag, /if \(Math\.abs\(dy\) > Math\.abs\(dx\)\) return\s*\n\s*appDrag\.preventStealing = true/)
+})
+
+test("a deactivation cannot run through an activation", () => {
+  const service = read("Service.qml")
+  // activateMode always refused to start while one was in flight; deactivate
+  // did not, so it could restore from previousState and clear it while the
+  // activation was still probing, leaving the mode on with nothing to undo.
+  assert.match(service, /function deactivateMode[\s\S]*?if \(service\.activating\) \{/)
+})
+
+test("a capture and an activation do not share one probe result", () => {
+  const service = read("Service.qml")
+  assert.match(service, /property var captureResult/)
+  assert.match(service, /id: captureProcess[\s\S]*?service\.captureResult = Model\.parseProbeOutput/)
+  // Nothing in the capture path may read or write the activation's result.
+  const capture = fnBody(service, "function finishCapture()")
+  assert.doesNotMatch(capture, /probeResult/)
+  assert.doesNotMatch(fnBody(service, "function capturedWindows()"), /service\.probeResult/)
+})
+
+test("a chooser that never comes back cannot strand the editor", () => {
+  const qml = read("EditorWindow.qml")
+  // The editor's `visible` reads `suspended`. Every other subprocess here runs
+  // bounded with a watchdog behind it; these three did not.
+  assert.match(qml, /function suspendFor[\s\S]*?binTimeout/)
+  assert.match(qml, /function suspendFor[\s\S]*?chooserWatchdog\.restart\(\)/)
+  assert.match(qml, /id: chooserWatchdog[\s\S]*?root\.resume\(\)/)
+})
+
+test("an export does not silently replace the last one", () => {
+  const qml = read("EditorWindow.qml")
+  assert.doesNotMatch(qml, /omara-export\.json/)
+  assert.match(qml, /function exportFileName[\s\S]*?omara-export-/)
+})
+
+test("an import lands on what it imported", () => {
+  const qml = read("EditorWindow.qml")
+  // importFromText says which modes arrived; the end of the list only says
+  // which mode happens to be last, and a replace appends nothing.
+  assert.doesNotMatch(qml, /selectMode\(modes\[modes\.length - 1\]\.id\)/)
+  assert.match(qml, /result\.added\[0\]|result\.added && result\.added\.length > 0/)
+  assert.match(qml, /var result = service\.importFromText/)
+})
+
+test("the panel does not act on shortcuts until it has been touched", () => {
+  const qml = read("EditorWindow.qml")
+  // A layer surface on the Overlay layer is delivered keys meant for other
+  // windows, and Ctrl+N or Ctrl+D on it can create a mode nobody asked for.
+  // Escape and Ctrl+S stay live: neither can invent or destroy anything.
+  assert.match(qml, /property bool engaged: false/)
+  assert.match(qml, /if \(root\.engaged\) root\.requestCreateMode\(\)/)
+  assert.match(qml, /if \(root\.engaged\) root\.duplicateSelected\(\)/)
+  assert.match(qml, /HoverHandler \{\s*\n\s*onPointChanged: root\.engaged = true/)
+})
+
+test("the button that switches modes says so", () => {
+  const qml = read("EditorWindow.qml")
+  // It saves, closes the panel and puts the desktop into the mode. Calling
+  // that "Test" promised a trial it has no way to give.
+  assert.doesNotMatch(qml, /text: "Test"/)
+  assert.match(qml, /text: "Activate"/)
+})
+
+test("the canvas says what the shape it draws is worth", () => {
+  const qml = read("WorkspaceCanvas.qml")
+  // The dividers are draggable and the ratio is saved, and activationPlan
+  // never reads it: what a mode carries out of here is which workspace and in
+  // what order. A board that does not say so is making a promise for the
+  // plugin that the plugin does not keep.
+  assert.match(qml, /the tiling itself is Hyprland's/)
+  const plan = fnBody(read("Model.js"), "function activationPlan(mode, options)")
+  assert.doesNotMatch(plan, /layouts|\btree\b|ratio/)
+})
+
+test("every window a capture is given ends up in exactly one pane", () => {
+  // paneTreeFromRects recurses on rectangles the compositor handed us, and
+  // those can be anything: overlapping, zero-sized, stacked, off-screen.
+  // Whatever it does with the shape, nothing may be dropped or duplicated.
+  let seed = 12345
+  const rand = (n) => (seed = (seed * 1103515245 + 12345) % 2147483648) % n
+
+  for (let round = 0; round < 200; round++) {
+    const count = 1 + rand(9)
+    const windows = []
+    for (let i = 0; i < count; i++)
+      windows.push({
+        desktopId: "app" + rand(3),
+        workspace: 1 + rand(3),
+        x: rand(1900), y: rand(1000),
+        width: rand(2) === 0 ? 0 : 1 + rand(900),
+        height: rand(2) === 0 ? 0 : 1 + rand(900)
+      })
+
+    const captured = Model.captureMode({ windows })
+    const uids = captured.applications.map(a => a.uid)
+    assert.equal(uids.length, count)
+
+    const placed = []
+    for (const layout of captured.workspaces.layouts)
+      placed.push(...Model.paneApps(layout.tree, []))
+    assert.deepEqual(placed.slice().sort(), uids.slice().sort(),
+      `round ${round}: panes and applications disagree`)
+    assert.equal(new Set(placed).size, placed.length, `round ${round}: a uid in two panes`)
   }
 })
