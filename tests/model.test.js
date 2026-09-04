@@ -1223,7 +1223,16 @@ test("a mode is renamed where its icon is chosen, and nowhere else", () => {
 test("a pane says what it runs, and lets you say it", () => {
   const canvas = read("WorkspaceCanvas.qml")
   // The detail line is the only thing telling two Foots apart on a board.
-  assert.match(canvas, /Model\.applicationDetail\(pane\.app\)/)
+  assert.match(canvas, /readonly property string detail: Model\.applicationDetail\(app\)/)
+
+  // A pane with no arguments and no folder is indistinguishable from a pane
+  // that takes neither, so hovering one offers what picking it would give.
+  assert.match(canvas, /readonly property bool hinting: app && !editing && detail === ""/)
+  assert.match(canvas, /canvas\.pointerPath === modelData\.path/)
+  assert.match(canvas, /pane\.hinting \? "arguments  ·  folder" : ""/)
+  // Never promised on a pane too small to take it up.
+  assert.match(canvas, /hinting:[\s\S]{0,120}roomForFields/)
+  assert.match(canvas, /editing: chosen && app && roomForFields/)
   for (const field of ["command", "args", "directory"])
     assert.match(canvas, new RegExp(`setApplicationField\\(pane\\.modelData\\.app, "${field}"`))
   // Inputs only once a pane is picked and only where a field fits, so a board

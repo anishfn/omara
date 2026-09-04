@@ -636,8 +636,17 @@ Item {
               // only once you have picked that pane and only where there is
               // room for a field to be a field. A board of unpicked panes
               // stays a board of names.
-              readonly property bool editing: chosen && app
-                && width > Style.space(150) && height > Style.space(120)
+              readonly property bool roomForFields: width > Style.space(150)
+                && height > Style.space(120)
+              readonly property bool editing: chosen && app && roomForFields
+              readonly property string detail: Model.applicationDetail(app)
+              // An icon with a name under it and nothing else looks like a
+              // pane with nothing to set, so a pane carrying neither says on
+              // hover what picking it would offer. Only where the fields
+              // would actually fit: a hint that cannot be taken up is worse
+              // than no hint.
+              readonly property bool hinting: app && !editing && detail === ""
+                && roomForFields && canvas.pointerPath === modelData.path
 
               x: modelData.x
               y: modelData.y
@@ -710,14 +719,17 @@ Item {
 
                 // Two Foots on one board are two different windows, and this
                 // is the line that says which is which: what it runs, or
-                // failing that where it runs.
+                // failing that where it runs — and on a pane with neither, on
+                // hover, the offer to give it one.
                 Text {
                   width: parent.width
                   visible: !pane.editing && text !== "" && pane.height > Style.space(52)
                   horizontalAlignment: Text.AlignHCenter
                   textFormat: Text.PlainText
-                  text: Model.applicationDetail(pane.app)
-                  color: canvas.dim
+                  text: pane.detail !== "" ? pane.detail : (pane.hinting ? "arguments  ·  folder" : "")
+                  // Dimmer than a real detail: this is an affordance, not a
+                  // fact about the window.
+                  color: pane.detail !== "" ? canvas.dim : Util.alpha(canvas.foreground, 0.34)
                   font.family: canvas.fontFamily
                   font.pixelSize: Style.font.caption
                   elide: Text.ElideRight
