@@ -5,14 +5,20 @@ import qs.Commons
 import qs.Ui
 import "Model.js" as Model
 
-// Glyph grid for the mode icon, laid out like Omarchy's emoji panel.
-// Glyphs come from icons.json, which only contains ones the shipped menu
-// already uses, so nothing in here renders as a tofu box.
+// What a mode is called and what it looks like, in one place: the two halves
+// of its identity, which is also the one thing a chip in the tab row shows.
+// Renaming lives here rather than in the options form because the chip is
+// where you go looking for it.
+//
+// The glyph grid is laid out like Omarchy's emoji panel. Glyphs come from
+// icons.json, which only contains ones the shipped menu already uses, so
+// nothing in here renders as a tofu box.
 Item {
   id: root
 
   required property var editor
 
+  readonly property var draft: editor ? editor.draft : null
   readonly property color foreground: editor ? editor.foreground : Color.popups.text
   readonly property color background: editor ? editor.background : Color.popups.background
   readonly property color dim: editor ? editor.dim : Qt.darker(Color.popups.text, 1.5)
@@ -42,7 +48,18 @@ Item {
     query = ""
     cursor = 0
     if (icons.length === 0) iconFile.reload()
-    Qt.callLater(function() { search.forceActiveFocus() })
+    // The name is the field with something already in it, and the reason to
+    // open this on a mode that already has an icon.
+    Qt.callLater(function() { nameField.forceActiveFocus() })
+  }
+
+  // A TextField commits on editingFinished, which a hidden overlay never
+  // reaches. Every way out of here goes through this first, so a name typed
+  // and then dismissed with Escape is still the name you typed.
+  function commitName() {
+    if (!root.editor || !root.draft) return
+    if (String(nameField.text) === String(root.draft.name || "")) return
+    root.editor.setDraft("name", nameField.text)
   }
 
   function move(delta) {
@@ -56,6 +73,7 @@ Item {
 
   function activate() {
     if (cursor < 0 || cursor >= rows.length) return
+    root.commitName()
     root.chosen(String(rows[cursor].g))
   }
 
@@ -94,7 +112,7 @@ Item {
 
       Text {
         anchors.verticalCenter: parent.verticalCenter
-        text: "Choose an icon"
+        text: "Mode"
         color: root.foreground
         font.family: root.fontFamily
         font.pixelSize: Style.font.title
@@ -108,17 +126,50 @@ Item {
         text: "No icon"
         foreground: root.foreground
         fontFamily: root.fontFamily
-        onClicked: root.cleared()
+        onClicked: { root.commitName(); root.cleared() }
       }
 
       PanelActionButton {
         anchors.verticalCenter: parent.verticalCenter
         iconText: Model.Glyph.close
-        tooltipText: "Cancel"
+        tooltipText: "Done"
         foreground: root.foreground
         fontFamily: root.fontFamily
-        onClicked: root.dismissed()
+        Accessible.name: "Done"
+        onClicked: { root.commitName(); root.dismissed() }
       }
+    }
+
+    Text {
+      width: layout.width
+      text: "Name"
+      color: root.dim
+      font.family: root.fontFamily
+      font.pixelSize: Style.font.caption
+    }
+
+    TextField {
+      id: nameField
+      width: layout.width
+      text: root.draft ? String(root.draft.name || "") : ""
+      placeholderText: "Name"
+      foreground: root.foreground
+      Accessible.name: "Mode name"
+      onEditingFinished: root.commitName()
+
+      // Enter hands the keyboard to the grid, which is the other half of what
+      // this panel is for.
+      Keys.onReturnPressed: { root.commitName(); search.forceActiveFocus() }
+      Keys.onEnterPressed: { root.commitName(); search.forceActiveFocus() }
+      Keys.onEscapePressed: { root.commitName(); root.dismissed() }
+    }
+
+    Text {
+      width: layout.width
+      text: "Icon"
+      color: root.dim
+      font.family: root.fontFamily
+      font.pixelSize: Style.font.caption
     }
 
     TextField {
@@ -171,7 +222,7 @@ Item {
 
         Accessible.role: Accessible.Button
         Accessible.name: String(modelData.k)
-        Accessible.onPressAction: root.chosen(String(modelData.g))
+        Accessible.onPressAction: { root.commitName(); root.chosen(String(modelData.g)) }
 
         Text {
           anchors.centerIn: parent
@@ -188,7 +239,7 @@ Item {
           hoverEnabled: true
           cursorShape: Qt.PointingHandCursor
           onEntered: root.cursor = index
-          onClicked: root.chosen(String(parent.modelData.g))
+          onClicked: { root.commitName(); root.chosen(String(parent.modelData.g)) }
         }
       }
     }

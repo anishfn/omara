@@ -106,6 +106,37 @@ function asStringList(value, maxItems, maxLength) {
   return out
 }
 
+// ------------------------------------------------------------------ paths
+//
+// A folder is stored the way you would type it — `~/Projects`, not
+// `/home/you/Projects` — so a mode exported off one machine still opens the
+// right thing on another. `~` is expanded once, at launch.
+
+function prettyDirectory(value) {
+  var s = asString(value, "").trim()
+  if (s === "") return ""
+  while (s.length > 1 && s.charAt(s.length - 1) === "/") s = s.slice(0, -1)
+  return s
+}
+
+function collapseHome(path, home) {
+  var p = prettyDirectory(path)
+  var h = prettyDirectory(home)
+  if (p === "" || h === "" || h === "/") return p
+  if (p === h) return "~"
+  if (p.indexOf(h + "/") === 0) return "~" + p.slice(h.length)
+  return p
+}
+
+function expandHome(path, home) {
+  var p = prettyDirectory(path)
+  var h = prettyDirectory(home)
+  if (p === "" || h === "") return p
+  if (p === "~") return h
+  if (p.indexOf("~/") === 0) return h + p.slice(1)
+  return p
+}
+
 // -------------------------------------------------------------------- ids
 
 function slugify(name) {
@@ -149,11 +180,22 @@ function defaultMode(id, name) {
   }
 }
 
-// An application is a desktop id or a raw command, never both.
+// How long an argument string or a folder is allowed to be. Long enough for a
+// real URL, short enough that a pasted blob cannot become the config.
+var MAX_ARGS = 512
+var MAX_DIRECTORY = 512
+
+// An application is a desktop id or a raw command, never both. Either one can
+// carry `args` (appended to the launch, parsed the way a shell would) and
+// `directory` (the folder it starts in) — the two things a window has that its
+// name does not say.
 function normalizeApplication(raw) {
   if (typeof raw === "string") {
     var only = raw.trim()
-    return only === "" ? null : { uid: "", desktopId: "", command: only, workspace: null, note: "", enabled: true }
+    return only === "" ? null : {
+      uid: "", desktopId: "", command: only, args: "", directory: "",
+      workspace: null, note: "", enabled: true
+    }
   }
   if (!isPlainObject(raw)) return null
   var desktopId = asString(raw.desktopId, "").trim()
@@ -168,6 +210,12 @@ function normalizeApplication(raw) {
     uid: UID_PATTERN.test(uid) ? uid : "",
     desktopId: desktopId,
     command: command,
+    // One line, always: a newline in either would end up in a shell.
+    args: asString(raw.args, "").replace(/[\r\n]+/g, " ").trim().slice(0, MAX_ARGS),
+    // Through prettyDirectory so `~/Projects/` and `~/Projects` are one
+    // folder, and so capture cannot split one app into two over a slash.
+    directory: prettyDirectory(
+      asString(raw.directory, "").replace(/[\r\n]+/g, " ").trim().slice(0, MAX_DIRECTORY)),
     workspace: asWorkspace(raw.workspace),
     // Display only, set by capture from the window title. Never affects launch.
     note: asString(raw.note, "").trim().slice(0, 120),
@@ -178,6 +226,28 @@ function normalizeApplication(raw) {
 function applicationLabel(app) {
   if (!isPlainObject(app)) return ""
   return app.desktopId ? String(app.desktopId) : String(app.command || "")
+}
+
+// The second line under an application's name: what makes this Foot the one
+// running btop rather than any other Foot. Arguments say more than a folder,
+// so they win when a window has both.
+function applicationDetail(app) {
+  if (!isPlainObject(app)) return ""
+  var args = asString(app.args, "").trim()
+  if (args !== "") return args
+  return prettyDirectory(app.directory)
+}
+
+// The whole command line an application would run, as one string, for the
+// import preview and the log. Not for a shell: nothing here is quoted.
+function applicationRunLine(app) {
+  if (!isPlainObject(app)) return ""
+  var head = app.desktopId ? String(app.desktopId) + ".desktop" : String(app.command || "")
+  if (head === "") return ""
+  var args = asString(app.args, "").trim()
+  var line = args === "" ? head : head + " " + args
+  var dir = prettyDirectory(app.directory)
+  return dir === "" ? line : line + "  (in " + dir + ")"
 }
 
 // ------------------------------------------------------------ pane layouts
@@ -746,7 +816,7 @@ function parseConfig(text) {
   if (input.length > MAX_IMPORT_BYTES)
     return {
       config: defaultConfig(),
-      warnings: ["omara.json is larger than " + MAX_IMPORT_BYTES + " bytes; started from defaults"],
+      warnings: ["wsmodes.json is larger than " + MAX_IMPORT_BYTES + " bytes; started from defaults"],
       recovered: true,
       firstRun: false
     }
@@ -758,7 +828,7 @@ function parseConfig(text) {
   } catch (e) {
     return {
       config: defaultConfig(),
-      warnings: ["omara.json is not valid JSON (" + (e && e.message ? e.message : "parse error") + "). Using defaults; the file was left untouched."],
+      warnings: ["wsmodes.json is not valid JSON (" + (e && e.message ? e.message : "parse error") + "). Using defaults; the file was left untouched."],
       recovered: true,
       firstRun: false
     }
@@ -961,12 +1031,16 @@ function activationPlan(mode, options) {
     for (var i = 0; i < apps.length; i++) {
       if (apps[i].enabled === false) continue
       var workspace = apps[i].workspace === undefined ? null : apps[i].workspace
+      var detail = applicationDetail(apps[i])
       steps.push({
         kind: "applications",
         label: "Launch " + applicationLabel(apps[i])
+          + (detail === "" ? "" : " " + detail)
           + (workspace === null ? "" : " on workspace " + workspace),
         value: apps[i].command || "",
         desktopId: apps[i].desktopId || "",
+        args: apps[i].args || "",
+        directory: apps[i].directory || "",
         workspace: workspace
       })
     }
@@ -1048,10 +1122,8 @@ function importRuns(mode) {
   if (!isPlainObject(mode)) return out
   var apps = Array.isArray(mode.applications) ? mode.applications : []
   for (var i = 0; i < apps.length; i++) {
-    var app = apps[i]
-    if (!isPlainObject(app)) continue
-    if (app.desktopId) out.push("app  " + app.desktopId + ".desktop")
-    else if (app.command) out.push("app  " + app.command)
+    var line = applicationRunLine(apps[i])
+    if (line !== "") out.push("app  " + line)
   }
   var c = isPlainObject(mode.commands) ? mode.commands : {}
   var hooks = (Array.isArray(c.onActivate) ? c.onActivate : [])
@@ -1103,7 +1175,7 @@ function exportPayload(config, ids) {
     delete ctx.enabled
     out.push(ctx)
   }
-  return { version: SCHEMA_VERSION, kind: "omara-export", modes: out }
+  return { version: SCHEMA_VERSION, kind: "wsmodes-export", modes: out }
 }
 
 function parseImport(text) {
@@ -1197,12 +1269,17 @@ function probeField(value) {
   return s.length > PROBE_MAX_FIELD ? s.slice(0, PROBE_MAX_FIELD) : s
 }
 
-// A closed record: three known keys, and nothing the output can add to them.
+// A closed record: four known keys, and nothing the output can add to them.
 // `missing` is null-prototype because the lookup is `missing[name] === true` —
 // on a plain object a command called `toString` or `valueOf` would come back
 // truthy off the prototype chain and be reported as not installed.
+// A process's argv arrives with its NUL separators turned into unit
+// separators, because an argument is allowed to contain a space and the line
+// it rides on is split by tabs.
+var PROC_ARG_SEPARATOR = "\u001f"
+
 function parseProbeOutput(text) {
-  var out = { wallpaper: "", theme: "", missing: Object.create(null) }
+  var out = { wallpaper: "", theme: "", missing: Object.create(null), processes: Object.create(null) }
   var raw = typeof text === "string" ? text : String(text === undefined || text === null ? "" : text)
   if (raw.length > PROBE_MAX_BYTES) raw = raw.slice(0, PROBE_MAX_BYTES)
 
@@ -1215,6 +1292,15 @@ function parseProbeOutput(text) {
     else if (parts[0] === "APP" && parts[1] === "missing") {
       var name = probeField(parts[2])
       if (name !== "") out.missing[name] = true
+    }
+    else if (parts[0] === "PROC") {
+      var pid = probeField(parts[1])
+      if (pid === "" || !/^[0-9]{1,10}$/.test(pid)) continue
+      var argv = []
+      var words = probeField(parts[3] || "").split(PROC_ARG_SEPARATOR)
+      for (var w = 0; w < words.length && w < PROBE_MAX_ITEMS; w++)
+        if (words[w] !== "") argv.push(words[w])
+      out.processes[pid] = { cwd: probeField(parts[2]), argv: argv }
     }
   }
   return out
@@ -1240,7 +1326,7 @@ function parseFileResult(text, limit) {
 }
 
 function emptyProbeResult() {
-  return { wallpaper: "", theme: "", missing: Object.create(null) }
+  return { wallpaper: "", theme: "", missing: Object.create(null), processes: Object.create(null) }
 }
 
 // ---------------------------------------------------------------- triggers
@@ -1365,11 +1451,81 @@ function evaluateTrigger(config, event, state) {
 
 // --------------------------------------------------------------- capture
 
+// Everything after one of these is the command the terminal was told to run,
+// which is the whole point of capturing that window rather than a bare shell.
+var TERMINAL_EXEC_FLAGS = ["-e", "-x", "--command", "--execute"]
+
+// Paths under these belong to the program, not to you: an Electron app is
+// launched with its own bundle as an argument, and `code /usr/lib/code/out/
+// main.js` is not a thing anyone meant to write down.
+var SYSTEM_PATH_PREFIXES = ["/usr/", "/opt/", "/nix/", "/snap/", "/run/", "/app/", "/var/lib/flatpak/"]
+
+function looksLikeUrl(token) {
+  return /^[a-z][a-z0-9+.-]*:\/\//i.test(token)
+}
+
+function looksLikePath(token) {
+  return token.charAt(0) === "/" || token.indexOf("~/") === 0 || token.indexOf("./") === 0
+}
+
+function isSystemPath(token) {
+  for (var i = 0; i < SYSTEM_PATH_PREFIXES.length; i++)
+    if (token.indexOf(SYSTEM_PATH_PREFIXES[i]) === 0) return true
+  return false
+}
+
+// Reduce a real /proc command line to the part worth putting in a mode.
+//
+// A window's argv is mostly what its launcher decided — session ids, ozone
+// flags, a renderer's own bundle path. What a person would recognise is the
+// document, the URL, or the command a terminal was handed. So: drop argv[0]
+// and every flag, keep URLs, keep paths that are not the program's own, keep
+// bare positional words, and keep the entire tail once a terminal exec flag
+// says the rest is a command line of its own.
+function captureArguments(argv, home) {
+  var list = Array.isArray(argv) ? argv : []
+  var kept = []
+  for (var i = 1; i < list.length; i++) {
+    var token = asString(list[i], "").trim()
+    if (token === "" || token === "--") continue
+
+    if (TERMINAL_EXEC_FLAGS.indexOf(token) !== -1) {
+      // The flag and everything after it, verbatim: this is a command, and a
+      // command's own flags are not ours to filter.
+      for (var t = i; t < list.length; t++) {
+        var tail = asString(list[t], "").trim()
+        if (tail !== "") kept.push(tail)
+      }
+      break
+    }
+
+    if (token.charAt(0) === "-") continue
+    if (looksLikeUrl(token)) { kept.push(token); continue }
+    if (looksLikePath(token)) {
+      if (isSystemPath(token)) continue
+      kept.push(collapseHome(token, home))
+      continue
+    }
+    kept.push(token)
+  }
+  return kept.join(" ").slice(0, MAX_ARGS)
+}
+
+// Your home directory is where everything starts, so recording it says
+// nothing. Anywhere else is the folder you actually opened this in.
+function captureDirectory(cwd, home) {
+  var dir = prettyDirectory(cwd)
+  if (dir === "" || dir === "/") return ""
+  var collapsed = collapseHome(dir, home)
+  if (collapsed === "~" || collapsed === "") return ""
+  return collapsed.slice(0, MAX_DIRECTORY)
+}
+
 // Shape a snapshot of the running desktop into mode fields. Takes plain
 // data so it stays testable; the caller gathers it from Hyprland/PipeWire.
 //
 // state: { name, description, workspace, dnd, audioOutput, wallpaper, theme,
-//          windows: [{ desktopId, command, workspace }] }
+//          windows: [{ desktopId, command, workspace, title, args, directory }] }
 function captureMode(state) {
   var s = isPlainObject(state) ? state : {}
   var windows = Array.isArray(s.windows) ? s.windows : []
@@ -1381,13 +1537,18 @@ function captureMode(state) {
     var app = normalizeApplication({
       desktopId: w.desktopId,
       command: w.command,
+      args: w.args,
+      directory: w.directory,
       workspace: w.workspace,
       note: w.title,
       enabled: true
     })
     if (!app) continue
-    // Three terminals on one workspace are one entry, not three.
-    var key = (app.desktopId || app.command) + "@" + String(app.workspace)
+    // Three terminals on one workspace are one entry, not three — but a
+    // terminal running btop and a terminal sitting in ~/Projects are two
+    // different things to open, so what they run is part of what they are.
+    var key = (app.desktopId || app.command) + " " + app.args + " " + app.directory
+      + "@" + String(app.workspace)
     if (seen[key]) continue
     seen[key] = true
     apps.push(app)
@@ -1547,6 +1708,11 @@ if (typeof module !== "undefined" && module.exports) {
     defaultMode: defaultMode,
     normalizeApplication: normalizeApplication,
     applicationLabel: applicationLabel,
+    applicationDetail: applicationDetail,
+    applicationRunLine: applicationRunLine,
+    prettyDirectory: prettyDirectory,
+    collapseHome: collapseHome,
+    expandHome: expandHome,
     MAX_LAYOUTS: MAX_LAYOUTS,
     MAX_PANES: MAX_PANES,
     MAX_SPLIT_DEPTH: MAX_SPLIT_DEPTH,
@@ -1603,6 +1769,7 @@ if (typeof module !== "undefined" && module.exports) {
     PLACEMENT_TTL_MS: PLACEMENT_TTL_MS,
     placementKeys: placementKeys,
     parseProbeOutput: parseProbeOutput,
+    PROC_ARG_SEPARATOR: PROC_ARG_SEPARATOR,
     parseFileResult: parseFileResult,
     emptyProbeResult: emptyProbeResult,
     prunePlacements: prunePlacements,
@@ -1611,6 +1778,8 @@ if (typeof module !== "undefined" && module.exports) {
     triggerMatches: triggerMatches,
     evaluateTrigger: evaluateTrigger,
     captureMode: captureMode,
+    captureArguments: captureArguments,
+    captureDirectory: captureDirectory,
     Glyph: Glyph,
     prettyThemeName: prettyThemeName,
     themeList: themeList,

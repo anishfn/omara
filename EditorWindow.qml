@@ -366,6 +366,8 @@ Item {
       uid: "",
       desktopId: String(fields.desktopId || ""),
       command: String(fields.command || ""),
+      args: String(fields.args || ""),
+      directory: String(fields.directory || ""),
       workspace: null,
       note: "",
       enabled: fields.enabled !== false
@@ -752,7 +754,7 @@ Item {
       onStreamFinished: {
         var dir = root.firstLine(text)
         if (dir === "" || !root.service) return
-        root.writeExport(dir + "/omara-export.json", root.service.exportText(null))
+        root.writeExport(dir + "/wsmodes-export.json", root.service.exportText(null))
       }
     }
   }
@@ -765,7 +767,7 @@ Item {
     anchors { top: true; bottom: true; left: true; right: true }
     color: "transparent"
     exclusionMode: ExclusionMode.Ignore
-    WlrLayershell.namespace: "omara-editor"
+    WlrLayershell.namespace: "wsmodes-editor"
     WlrLayershell.layer: WlrLayer.Overlay
 
     // Exclusive for long enough to take the keyboard, then OnDemand.
@@ -930,7 +932,7 @@ Item {
                     // per mode reads as a row of chips that are cut off.
                     height: newMode.implicitHeight
                     tooltipText: root.selectedId === modelData.id
-                      ? "Click again to choose an icon"
+                      ? "Click again to rename it or change its icon"
                       : (modelData.description || "")
                     Accessible.name: "Edit the mode " + modelData.name
                     // Selecting a different mode is a route out of a
@@ -1376,7 +1378,7 @@ Item {
                     width: parent.width
                     wrapMode: Text.Wrap
                     textFormat: Text.PlainText
-                    text: "Config: ~/.config/omarchy/omara.json"
+                    text: "Config: ~/.config/omarchy/wsmodes.json"
                     color: root.dim
                     font.family: root.fontFamily
                     font.pixelSize: Style.font.caption

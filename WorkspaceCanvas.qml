@@ -623,6 +623,7 @@ Item {
             model: canvas.rects.panes.length
 
             Rectangle {
+              id: pane
               required property int index
 
               readonly property var modelData: canvas.paneRect(index)
@@ -631,6 +632,12 @@ Item {
               readonly property bool targeted: canvas.dragging && canvas.overPane
                 && canvas.hoverPath === modelData.path
               readonly property bool off: app && app.enabled === false
+              // What this window runs is edited in the pane that runs it, but
+              // only once you have picked that pane and only where there is
+              // room for a field to be a field. A board of unpicked panes
+              // stays a board of names.
+              readonly property bool editing: chosen && app
+                && width > Style.space(150) && height > Style.space(120)
 
               x: modelData.x
               y: modelData.y
@@ -672,20 +679,21 @@ Item {
 
               Column {
                 anchors.centerIn: parent
-                width: parent.width - Style.space(12)
+                width: pane.width - Style.space(12)
                 spacing: Style.space(4)
-                visible: modelData.app !== ""
-                opacity: parent.off ? 0.45 : 1
+                visible: pane.modelData.app !== ""
+                opacity: pane.off ? 0.45 : 1
 
                 Image {
                   anchors.horizontalCenter: parent.horizontalCenter
                   width: Style.font.iconLarge
                   height: Style.font.iconLarge
-                  visible: parent.parent.height > Style.space(56) && source !== ""
+                  // The fields need the room the icon was using.
+                  visible: !pane.editing && pane.height > Style.space(56) && source !== ""
                   fillMode: Image.PreserveAspectFit
                   sourceSize.width: width * Screen.devicePixelRatio
                   sourceSize.height: height * Screen.devicePixelRatio
-                  source: canvas.editor.applicationIcon(parent.parent.app)
+                  source: canvas.editor.applicationIcon(pane.app)
                   asynchronous: true
                 }
 
@@ -693,27 +701,62 @@ Item {
                   width: parent.width
                   horizontalAlignment: Text.AlignHCenter
                   textFormat: Text.PlainText
-                  text: canvas.editor.applicationName(parent.parent.app)
+                  text: canvas.editor.applicationName(pane.app)
                   color: canvas.foreground
                   font.family: canvas.fontFamily
                   font.pixelSize: Style.font.bodySmall
                   elide: Text.ElideRight
                 }
 
+                // Two Foots on one board are two different windows, and this
+                // is the line that says which is which: what it runs, or
+                // failing that where it runs.
+                Text {
+                  width: parent.width
+                  visible: !pane.editing && text !== "" && pane.height > Style.space(52)
+                  horizontalAlignment: Text.AlignHCenter
+                  textFormat: Text.PlainText
+                  text: Model.applicationDetail(pane.app)
+                  color: canvas.dim
+                  font.family: canvas.fontFamily
+                  font.pixelSize: Style.font.caption
+                  elide: Text.ElideRight
+                }
+
                 // A custom command is edited where it runs, not in a list
-                // somewhere else — but only once you have picked the pane, so
-                // a board of them is a board of names rather than of inputs.
+                // somewhere else.
                 TextField {
                   width: parent.width
-                  visible: parent.parent.chosen && parent.parent.app
-                    && !parent.parent.app.desktopId
-                    && parent.parent.width > Style.space(160)
-                    && parent.parent.height > Style.space(96)
-                  text: parent.parent.app ? String(parent.parent.app.command || "") : ""
+                  visible: pane.editing && !pane.app.desktopId
+                  text: pane.app ? String(pane.app.command || "") : ""
                   placeholderText: "Command"
                   foreground: canvas.foreground
                   Accessible.name: "Application command"
-                  onEditingFinished: canvas.editor.setApplicationField(modelData.app, "command", text)
+                  onEditingFinished: canvas.editor.setApplicationField(pane.modelData.app, "command", text)
+                }
+
+                // What to hand the program: a file, a URL, or for a terminal
+                // the command it should run instead of a shell.
+                TextField {
+                  width: parent.width
+                  visible: pane.editing
+                  text: pane.app ? String(pane.app.args || "") : ""
+                  placeholderText: pane.app && pane.app.desktopId ? "Arguments, e.g. -e btop" : "Arguments"
+                  foreground: canvas.foreground
+                  Accessible.name: "Application arguments"
+                  onEditingFinished: canvas.editor.setApplicationField(pane.modelData.app, "args", text)
+                }
+
+                // The folder it starts in, which for a terminal is the cd you
+                // would otherwise type first.
+                TextField {
+                  width: parent.width
+                  visible: pane.editing
+                  text: pane.app ? String(pane.app.directory || "") : ""
+                  placeholderText: "Folder, e.g. ~/Projects"
+                  foreground: canvas.foreground
+                  Accessible.name: "Application folder"
+                  onEditingFinished: canvas.editor.setApplicationField(pane.modelData.app, "directory", text)
                 }
               }
 

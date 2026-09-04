@@ -48,7 +48,7 @@ use.
 `Service.qml` — `deactivateMode()`
 
 `activateMode` refuses to start while `activating` is true. `deactivateMode`
-has no such guard, and both the bar's *Disable mode* button and `omara
+has no such guard, and both the bar's *Disable mode* button and `wsmodes
 deactivate` reach it directly. During the environment probe (up to 10s) a
 deactivation can therefore run `restorePlan` against `previousState`, clear the
 snapshot, and set `activeMode` to null — and then the activation still in
@@ -126,7 +126,7 @@ skipped.
 `EditorWindow.qml` — `exportAll()`, `writeExport()`
 
 The folder chooser hands back a directory and the export always writes
-`omara-export.json` into it. A second export to the same folder silently
+`wsmodes-export.json` into it. A second export to the same folder silently
 replaces the first, and there is no way to choose a name.
 
 Fix: ask for a filename, or fall back to a timestamped one when the target

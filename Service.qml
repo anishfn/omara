@@ -16,8 +16,12 @@ Item {
   property string omarchyPath: Quickshell.env("OMARCHY_PATH")
 
   readonly property string home: Quickshell.env("HOME")
-  readonly property string configPath: home + "/.config/omarchy/omara.json"
-  readonly property string statePath: home + "/.local/state/omarchy/omara-state.json"
+  readonly property string configPath: home + "/.config/omarchy/wsmodes.json"
+  readonly property string statePath: home + "/.local/state/omarchy/wsmodes-state.json"
+  // This plugin used to be called Omara. Modes written under that name are
+  // still your modes, so the first load that finds nothing at the new path
+  // looks here before deciding you have none.
+  readonly property string legacyConfigPath: home + "/.config/omarchy/omara.json"
 
   // ------------------------------------------------------------------ state
 
@@ -47,8 +51,8 @@ Item {
     var next = [entry].concat(activityLog)
     if (next.length > activityLogLimit) next = next.slice(0, activityLogLimit)
     activityLog = next
-    if (level === "warn") console.warn("[omara]", message)
-    else console.log("[omara]", message)
+    if (level === "warn") console.warn("[wsmodes]", message)
+    else console.log("[wsmodes]", message)
     service.logged()
   }
 
@@ -307,7 +311,7 @@ Item {
   //
   // Quickshell's FileView takes a pathname, opens it, and reads to the end. It
   // has no descriptor-relative read, no O_NOFOLLOW, no non-blocking open and no
-  // size ceiling, so a FIFO at omara.json would block the shell on first read
+  // size ceiling, so a FIFO at wsmodes.json would block the shell on first read
   // and a symlink would redirect where modes are persisted.
   //
   // Checking the path and then handing the same name to FileView only narrows
@@ -370,7 +374,7 @@ Item {
     'target=$1\n' +
     dirCheck +
     'umask 077\n' +
-    'tmp=$(mktemp "$dir/.omara.XXXXXX") || fail "no temporary file could be made in $dir"\n' +
+    'tmp=$(mktemp "$dir/.wsmodes.XXXXXX") || fail "no temporary file could be made in $dir"\n' +
     'cat > "$tmp" || { rm -f "$tmp"; fail "the write did not complete"; }\n' +
     'mv -f -- "$tmp" "$target" || { rm -f "$tmp"; fail "the file could not be replaced"; }\n' +
     'printf \'RESULT\\tok\\t\\n\'\n'
@@ -510,7 +514,7 @@ Item {
     writeGuarded(service.configPath, text, function(verdict, detail) {
       if (verdict === "ok" || verdict === "superseded") return
       service.lastWrittenText = ""
-      log("warn", "Could not write omara.json: " + detail)
+      log("warn", "Could not write wsmodes.json: " + detail)
     })
   }
 
@@ -528,9 +532,42 @@ Item {
       service.configReadOnly = false
       service.configRefusal = ""
       var text = verdict === "absent" ? "" : content
+
+      // Exactly once, and only on the first load: after you have deleted
+      // every mode, a file left over from the old name must not bring them
+      // back on the next poll.
+      if (verdict === "absent" && !service.configLoaded && !service.legacyChecked) {
+        service.legacyChecked = true
+        service.adoptLegacyConfig()
+        return
+      }
+      service.legacyChecked = true
+
       if (service.configLoaded && text === service.lastWrittenText) return
       service.lastWrittenText = text
       service.loadConfig(text)
+    })
+  }
+
+  property bool legacyChecked: false
+
+  // Read the old file and load it as if it had been found at the new path.
+  // Nothing is moved or deleted: the next save writes wsmodes.json, and
+  // omara.json is left exactly where it is, in case you want to go back.
+  function adoptLegacyConfig() {
+    readGuarded(service.legacyConfigPath, function(verdict, detail, content) {
+      var text = verdict === "ok" ? String(content || "") : ""
+      // Empty either way, so the next save is a real write rather than a
+      // comparison against text that was never on disk under this name.
+      service.lastWrittenText = ""
+      if (text.trim() === "") {
+        service.loadConfig("")
+        return
+      }
+      log("info", "Adopted your modes from " + service.legacyConfigPath
+        + "; from now on they are saved to " + service.configPath)
+      service.loadConfig(text)
+      service.save()
     })
   }
 
@@ -549,10 +586,10 @@ Item {
     var reason = String(detail || "it did not pass the file check")
     if (service.configRefusal === reason) return
     service.configRefusal = reason
-    log("warn", "Refusing to read or write omara.json: " + reason)
+    log("warn", "Refusing to read or write wsmodes.json: " + reason)
     notify([
       "omarchy-notification-send", "--app-name", "Workspace Modes", "-u", "critical", "Workspace Modes",
-      "omara.json was not used because " + reason
+      "wsmodes.json was not used because " + reason
         + ". Workspace Modes started with no modes and will not write to that path. Nothing was changed or deleted."
     ])
   }
@@ -564,12 +601,12 @@ Item {
   function backupBrokenConfig(raw) {
     var backup = service.configPath + ".corrupt"
     writeGuarded(backup, String(raw === undefined || raw === null ? "" : raw), function(verdict, detail) {
-      if (verdict === "ok") log("warn", "Saved the unreadable omara.json as " + backup)
+      if (verdict === "ok") log("warn", "Saved the unreadable wsmodes.json as " + backup)
       else log("warn", "Could not save " + backup + ": " + detail)
     })
     notify([
       "omarchy-notification-send", "--app-name", "Workspace Modes", "-u", "normal",
-      "Workspace Modes", "omara.json could not be read. A copy was saved as omara.json.corrupt."
+      "Workspace Modes", "wsmodes.json could not be read. A copy was saved as wsmodes.json.corrupt."
     ])
   }
 
@@ -587,7 +624,7 @@ Item {
     readGuarded(service.statePath, function(verdict, detail, content) {
       if (verdict === "refuse") {
         service.stateReadOnly = true
-        log("warn", "Not reading or writing omara-state.json: " + detail)
+        log("warn", "Not reading or writing wsmodes-state.json: " + detail)
         return
       }
       service.stateReadOnly = false
@@ -611,7 +648,7 @@ Item {
     writeGuarded(service.statePath, JSON.stringify(service.previousState, null, 2) + "\n",
       function(verdict, detail) {
         if (verdict !== "ok" && verdict !== "superseded")
-          log("warn", "Could not write omara-state.json: " + detail)
+          log("warn", "Could not write wsmodes-state.json: " + detail)
       })
   }
 
@@ -776,16 +813,70 @@ Item {
       : "exec " + rule)
   }
 
-  function launchDesktopEntry(desktopId, workspace) {
+  // A folder is stored `~`-relative so it survives a machine change, and is
+  // only made absolute here, at the point something has to chdir into it.
+  function launchDirectory(directory) {
+    return Model.expandHome(String(directory || ""), service.home)
+  }
+
+  // One argv, one folder, one shell line. Quoting every word means a path with
+  // a space in it is one argument, and nothing in a file name is ever read as
+  // shell syntax.
+  function shellLineFor(argv, directory) {
+    var quoted = []
+    for (var i = 0; i < argv.length; i++) quoted.push(Util.shellQuote(argv[i]))
+    var line = quoted.join(" ")
+    return directory === "" ? line : "cd -- " + Util.shellQuote(directory) + " && " + line
+  }
+
+  // Detached on purpose: `exec "$@"` becomes the application, so supervising
+  // this would parent it to the shell and kill it on the next shell restart.
+  // Whether it could start at all is answered ahead of time by the probe,
+  // which is why runPlan skips a command that is not installed.
+  function execDetachedIn(argv, directory) {
+    // The folder rides in as an argument, never spliced into the script: the
+    // two constants below are the whole of what a shell is asked to parse.
+    var script = directory === "" ? 'exec "$@"' : 'cd -- "$1" || exit 1; shift; exec "$@"'
+    var extra = directory === "" ? [] : [directory]
+    Quickshell.execDetached(["bash", "-lc", script, "bash"].concat(extra, argv))
+  }
+
+  function launchDesktopEntry(desktopId, args, directory, workspace) {
     var entry = desktopEntry(desktopId)
     if (!entry)
       return { ok: false, detail: "\"" + desktopId + "\" is not installed; skipped" }
     var name = String(entry.name || desktopId)
     if (workspace !== null && workspace !== undefined && Model.workspaceRef(workspace) === "")
       return { ok: false, detail: "\"" + String(workspace) + "\" is not a workspace Hyprland can name; skipped" }
-    var where = workspace === null || workspace === undefined ? "" : " on workspace " + workspace
+    var placed = workspace !== null && workspace !== undefined
+    var where = placed ? " on workspace " + workspace : ""
 
-    if (where !== "") {
+    var extra = Model.parseArgv(String(args || ""))
+    if (extra.unterminated)
+      return { ok: false, detail: "Unbalanced quote in \"" + String(args) + "\"" }
+    var dir = launchDirectory(directory)
+
+    // Arguments and a folder are things a .desktop file cannot be told, so
+    // once a mode asks for either we run the entry's own Exec line instead of
+    // handing the id to gtk-launch. With neither, nothing changes: the launch
+    // still goes through the app daemon and lands in its own systemd scope.
+    if (extra.argv.length > 0 || dir !== "") {
+      var base = entryArgv(entry)
+      if (base.length === 0)
+        return { ok: false, detail: "\"" + desktopId + "\" has no command to run; skipped" }
+      var argv = base.concat(extra.argv)
+      var suffix = extra.argv.length > 0 ? " " + extra.argv.join(" ") : ""
+      if (dir !== "") suffix += " (in " + Model.prettyDirectory(directory) + ")"
+      if (placed) {
+        expectPlacement(Model.placementKeys(desktopId, argv[0], entry.startupClass), workspace)
+        launchOnWorkspace(workspace, shellLineFor(argv, dir))
+      } else {
+        execDetachedIn(argv, dir)
+      }
+      return { ok: true, detail: "Launched " + name + suffix + where }
+    }
+
+    if (placed) {
       expectPlacement(Model.placementKeys(desktopId, "", entry.startupClass), workspace)
       launchOnWorkspace(workspace, desktopLaunchCommand(desktopId))
       return { ok: true, detail: "Launched " + name + where }
@@ -800,29 +891,47 @@ Item {
     return { ok: true, detail: "Launched " + name, run: run }
   }
 
-  function launchApplication(command, workspace) {
-    var parsed = Model.parseArgv(command)
+  // A desktop entry's Exec line, as words. `command` is already split with the
+  // field codes resolved; execString is the raw line and only a fallback.
+  function entryArgv(entry) {
+    var out = []
+    var list = entry && entry.command ? entry.command : []
+    for (var i = 0; i < list.length; i++) {
+      var word = String(list[i] || "").trim()
+      // A field code left unresolved stands for a file we were not given.
+      if (word === "" || /^%[a-zA-Z]$/.test(word)) continue
+      out.push(word)
+    }
+    if (out.length > 0) return out
+    var parsed = Model.parseArgv(entry && entry.execString ? String(entry.execString) : "")
+    return parsed.unterminated ? [] : parsed.argv
+  }
+
+  function launchApplication(command, args, directory, workspace) {
+    var parsed = Model.parseArgv(String(command || ""))
     if (parsed.argv.length === 0)
       return { ok: false, detail: "Empty application command" }
     if (parsed.unterminated)
       return { ok: false, detail: "Unbalanced quote in \"" + command + "\"" }
+    var extra = Model.parseArgv(String(args || ""))
+    if (extra.unterminated)
+      return { ok: false, detail: "Unbalanced quote in \"" + String(args) + "\"" }
+
+    var argv = parsed.argv.concat(extra.argv)
+    var dir = launchDirectory(directory)
+    var suffix = extra.argv.length > 0 ? " " + extra.argv.join(" ") : ""
+    if (dir !== "") suffix += " (in " + Model.prettyDirectory(directory) + ")"
 
     if (workspace !== null && workspace !== undefined) {
       if (Model.workspaceRef(workspace) === "")
         return { ok: false, detail: "\"" + String(workspace) + "\" is not a workspace Hyprland can name; skipped" }
-      var quoted = []
-      for (var i = 0; i < parsed.argv.length; i++) quoted.push(Util.shellQuote(parsed.argv[i]))
-      expectPlacement(Model.placementKeys("", parsed.argv[0], ""), workspace)
-      launchOnWorkspace(workspace, quoted.join(" "))
-      return { ok: true, detail: "Launched " + parsed.argv[0] + " on workspace " + workspace }
+      expectPlacement(Model.placementKeys("", argv[0], ""), workspace)
+      launchOnWorkspace(workspace, shellLineFor(argv, dir))
+      return { ok: true, detail: "Launched " + argv[0] + suffix + " on workspace " + workspace }
     }
 
-    // Detached on purpose: `exec "$@"` becomes the application, so supervising
-    // this would parent it to the shell and kill it on the next shell restart.
-    // Whether it could start at all is answered ahead of time by the probe,
-    // which is why runPlan skips a command that is not installed.
-    Quickshell.execDetached(["bash", "-lc", 'exec "$@"', "bash"].concat(parsed.argv))
-    return { ok: true, detail: "Launched " + parsed.argv[0] }
+    execDetachedIn(argv, dir)
+    return { ok: true, detail: "Launched " + argv[0] + suffix }
   }
 
   // The documented hook capability, and detached for the same reason as a raw
@@ -843,8 +952,8 @@ Item {
       case "workspace": return focusWorkspace(step.value)
       case "applications":
         return step.desktopId
-          ? launchDesktopEntry(step.desktopId, step.workspace)
-          : launchApplication(step.value, step.workspace)
+          ? launchDesktopEntry(step.desktopId, step.args, step.directory, step.workspace)
+          : launchApplication(step.value, step.args, step.directory, step.workspace)
       case "commands": return runCommand(step.value)
     }
     return { ok: false, detail: "Unknown action \"" + step.kind + "\"" }
@@ -940,6 +1049,30 @@ Item {
     '  b=$(printf %s "$bin" | head -c 256)\n' +
     '  if PATH=$userpath command -v -- "$b" >/dev/null 2>&1; then printf \'APP\\tok\\t%s\\n\' "$b"\n' +
     '  else printf \'APP\\tmissing\\t%s\\n\' "$b"; fi\n' +
+    'done\n'
+
+  // Capture asks the same two questions about the desktop, and one more about
+  // every window on it: where its process is sitting, and what it was actually
+  // started with. Both come from /proc, which only answers for your own
+  // processes — a window someone else owns simply produces no PROC line.
+  //
+  // argv is joined on \037 rather than a space because an argument is allowed
+  // to contain a space; tabs and newlines are dropped so one process is always
+  // one line.
+  readonly property int captureMaxProcesses: 128
+  readonly property string captureScript:
+    safePath +
+    'ws=$(readlink -f "$HOME/.local/state/omarchy/current/background" 2>/dev/null | head -c 4096)\n' +
+    'printf \'WALLPAPER\\t%s\\n\' "$ws"\n' +
+    'th=$(head -c 256 "$HOME/.local/state/omarchy/current/theme.name" 2>/dev/null | head -n 1)\n' +
+    'printf \'THEME\\t%s\\n\' "$th"\n' +
+    'n=0\n' +
+    'for pid in "$@"; do\n' +
+    '  n=$((n + 1)); [ "$n" -gt 128 ] && break\n' +
+    '  case $pid in \'\'|*[!0-9]*) continue;; esac\n' +
+    '  cwd=$(readlink -f "/proc/$pid/cwd" 2>/dev/null | head -c 4096 | tr -d \'\\011\\012\')\n' +
+    '  args=$(head -c 8192 "/proc/$pid/cmdline" 2>/dev/null | tr -d \'\\011\\012\' | tr \'\\000\' \'\\037\')\n' +
+    '  printf \'PROC\\t%s\\t%s\\t%s\\n\' "$pid" "$cwd" "$args"\n' +
     'done\n'
 
   property var probeResult: Model.emptyProbeResult()
@@ -1304,10 +1437,14 @@ Item {
       // put a window back.
       var ws = top.workspace && top.workspace.id > 0 ? top.workspace.id : null
       var title = top.title ? String(top.title) : ""
+      // The pid is what lets capture ask /proc what this window is actually
+      // running and where from. A window that does not report one still
+      // captures, just without those two answers.
+      var pid = ipc && ipc.pid ? String(ipc.pid) : ""
       var entry = entryForWindowClass(cls)
       out.push(entry
-        ? { desktopId: String(entry.id), workspace: ws, title: title }
-        : { command: cls.toLowerCase(), workspace: ws, title: title })
+        ? { desktopId: String(entry.id), workspace: ws, title: title, pid: pid }
+        : { command: cls.toLowerCase(), workspace: ws, title: title, pid: pid })
     }
     return out
   }
@@ -1427,14 +1564,29 @@ Item {
   }
 
   property string captureName: ""
+  property var captureWindows: []
 
-  // Wallpaper and theme live on disk, so capture waits on the same probe
-  // activation uses. Everything else is already in memory.
+  // Wallpaper, theme, and every window's command line live outside this
+  // process, so capture waits on one subprocess for all of them. Everything
+  // else is already in memory.
+  //
+  // The window list is taken now rather than when the probe returns: the pids
+  // asked about have to be the pids answered for, and a window that closes in
+  // between would otherwise be captured with another process's command line.
   function captureCurrentSetup(name) {
     if (captureProcess.running) return false
     service.captureName = String(name || "")
+    service.captureWindows = openWindows()
     service.captureSettled = false
-    captureProcess.command = bounded(probeDeadlineSec, [binBash, "-lc", probeScript, "bash"])
+
+    var pids = []
+    for (var i = 0; i < service.captureWindows.length && pids.length < captureMaxProcesses; i++) {
+      var pid = service.captureWindows[i].pid
+      if (pid && pids.indexOf(pid) === -1) pids.push(pid)
+    }
+
+    captureProcess.command = bounded(probeDeadlineSec,
+      [binBash, "-lc", captureScript, "bash"].concat(pids))
     captureProcess.running = true
     captureWatchdog.restart()
     return true
@@ -1470,6 +1622,27 @@ Item {
     }
   }
 
+  // Fold what /proc said about each window's process back into the window it
+  // belongs to. A pid the probe could not read — another user's, or one that
+  // exited mid-capture — simply contributes nothing.
+  function capturedWindows() {
+    var processes = service.probeResult.processes || ({})
+    var out = []
+    for (var i = 0; i < service.captureWindows.length; i++) {
+      var w = service.captureWindows[i]
+      var proc = w.pid ? processes[w.pid] : null
+      out.push({
+        desktopId: w.desktopId,
+        command: w.command,
+        workspace: w.workspace,
+        title: w.title,
+        args: proc ? Model.captureArguments(proc.argv, service.home) : "",
+        directory: proc ? Model.captureDirectory(proc.cwd, service.home) : ""
+      })
+    }
+    return out
+  }
+
   function finishCapture() {
     var focused = Hyprland.focusedWorkspace
     var fields = Model.captureMode({
@@ -1480,9 +1653,10 @@ Item {
       audioOutput: currentAudioOutput(),
       wallpaper: service.probeResult.wallpaper,
       theme: service.probeResult.theme,
-      windows: openWindows()
+      windows: capturedWindows()
     })
     service.captureName = ""
+    service.captureWindows = []
 
     var id = createModeFrom(fields)
     log("info", "Captured " + fields.applications.length + " application(s) from the desktop")
@@ -1603,7 +1777,7 @@ Item {
       "-u", "normal",
       "Switch to " + ctx.name + "?",
       decision.reason + ", click to switch",
-      "--exec", "omarchy-shell", "-q", "omara", "activateWindows", ctx.id, "keep"
+      "--exec", "omarchy-shell", "-q", "wsmodes", "activateWindows", ctx.id, "keep"
     ])
   }
 
@@ -1645,7 +1819,7 @@ Item {
   // --------------------------------------------------------------------- IPC
 
   IpcHandler {
-    target: "omara"
+    target: "wsmodes"
 
     function list(): string {
       var out = []

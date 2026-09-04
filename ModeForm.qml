@@ -25,7 +25,7 @@ Column {
 
   // Tab from the panel lands here rather than on the header buttons, so the
   // keyboard path into a mode starts at its name.
-  function focusFirstField() { nameField.forceActiveFocus() }
+  function focusFirstField() { identityField.forceActiveFocus() }
 
   spacing: Style.space(12)
 
@@ -33,34 +33,23 @@ Column {
 
   PanelSectionHeader { width: form.width; text: "Mode"; foreground: form.foreground; fontFamily: form.fontFamily }
 
-  Row {
+  // The name and the icon are the same decision — they are what a chip in the
+  // tab row shows — so they are made together, in one overlay, and this is the
+  // way into it from here.
+  Button {
+    id: identityField
     width: form.width
-    spacing: Style.space(8)
-
-    TextField {
-      id: nameField
-      width: form.width - iconField.width - parent.spacing
-      text: form.draft ? form.draft.name : ""
-      placeholderText: "Name"
-      foreground: form.foreground
-      Accessible.name: "Mode name"
-      onEditingFinished: form.editor.setDraft("name", text)
-    }
-
-    Button {
-      id: iconField
-      width: Style.space(70)
-      height: Style.spacing.controlHeight + Style.spacing.inputPaddingY
-      bordered: true
-      text: form.draft && form.draft.icon ? form.draft.icon : "icon"
-      fontSize: form.draft && form.draft.icon ? Style.font.icon : Style.font.bodySmall
-      foreground: form.draft && form.draft.icon ? form.foreground : form.dim
-      fontFamily: form.fontFamily
-      tooltipText: "Choose an icon"
-      focusable: true
-      Accessible.name: "Choose a mode icon"
-      onClicked: form.editor.openIconPicker()
-    }
+    height: Style.spacing.controlHeight + Style.spacing.inputPaddingY
+    leftAlign: true
+    bordered: true
+    focusable: true
+    iconText: form.draft && form.draft.icon ? form.draft.icon : Model.Glyph.iconSlot
+    text: form.draft && form.draft.name ? String(form.draft.name) : "Unnamed mode"
+    foreground: form.draft && form.draft.name ? form.foreground : form.dim
+    fontFamily: form.fontFamily
+    tooltipText: "Rename this mode, or give it an icon"
+    Accessible.name: "Rename this mode or change its icon"
+    onClicked: form.editor.openIconPicker()
   }
 
   TextField {

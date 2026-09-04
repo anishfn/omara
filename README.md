@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/omara.png" alt="Workspace Modes" width="180">
+  <img src="assets/workspace-modes.png" alt="Workspace Modes" width="180">
 </p>
 
 <h1 align="center">Workspace Modes</h1>
@@ -22,7 +22,7 @@ Coding                              Deep Work
   Land on  ws 1
 ```
 
-You draw that layout; you do not type it. One click, or `omara activate coding`.
+You draw that layout; you do not type it. One click, or `wsmodes activate coding`.
 
 Local-first. No account, no cloud, no telemetry, no network access. Workspace
 Modes ships **empty**: nothing exists until you make it.
@@ -37,13 +37,13 @@ Modes ships **empty**: nothing exists until you make it.
   - [Requirements](#requirements)
   - [From git](#from-git)
   - [From a local copy](#from-a-local-copy)
-  - [Update](#update) · [Uninstall](#uninstall)
+  - [Update](#update) · [Upgrading from Omara](#upgrading-from-omara) · [Uninstall](#uninstall)
   - [Where things live](#where-things-live)
 - [Quick start](#quick-start)
 - [Building a mode](#building-a-mode)
   - [Capture the desktop](#capture-the-desktop)
   - [Applications](#applications)
-  - [Icons](#icons)
+  - [Name and icon](#name-and-icon)
   - [Workspaces](#workspaces)
   - [Environment](#environment)
   - [Commands](#commands)
@@ -121,8 +121,8 @@ omarchy plugin list >/dev/null && echo "plugin support: ok"
 ### From git
 
 ```bash
-omarchy plugin add https://github.com/anishfn/omara.git
-omarchy plugin enable io.github.anishfn.omara --section left
+omarchy plugin add https://github.com/anishfn/workspace-modes.git
+omarchy plugin enable io.github.anishfn.workspace-modes --section left
 ```
 
 Plugins land **disabled**, on purpose: a plugin is code that runs inside your
@@ -130,16 +130,16 @@ shell, so `add` and `enable` are two steps and the gap between them is for
 reading it.
 
 ```bash
-omarchy plugin add https://github.com/anishfn/omara.git
-$EDITOR ~/.config/omarchy/plugins/io.github.anishfn.omara     # read it
-omarchy plugin enable io.github.anishfn.omara --section left  # then run it
+omarchy plugin add https://github.com/anishfn/workspace-modes.git
+$EDITOR ~/.config/omarchy/plugins/io.github.anishfn.workspace-modes     # read it
+omarchy plugin enable io.github.anishfn.workspace-modes --section left  # then run it
 ```
 
 `--section` takes `left`, `center`, or `right`. To put the widget next to
 something specific instead:
 
 ```bash
-omarchy plugin enable io.github.anishfn.omara --section right --before omarchy.clock
+omarchy plugin enable io.github.anishfn.workspace-modes --section right --before omarchy.clock
 ```
 
 ### From a local copy
@@ -148,16 +148,16 @@ No git remote needed. Any folder named after the plugin id under
 `~/.config/omarchy/plugins/` is discovered:
 
 ```bash
-git clone https://github.com/anishfn/omara.git
-cp -r omara ~/.config/omarchy/plugins/io.github.anishfn.omara
-omarchy plugin enable io.github.anishfn.omara --section left
+git clone https://github.com/anishfn/workspace-modes.git
+cp -r workspace-modes ~/.config/omarchy/plugins/io.github.anishfn.workspace-modes
+omarchy plugin enable io.github.anishfn.workspace-modes --section left
 ```
 
 ### Check it worked
 
 ```bash
 omarchy plugin list | grep modes
-# io.github.anishfn.omara   enabled   third-party   bar-widget,service   Workspace Modes
+# io.github.anishfn.workspace-modes   enabled   third-party   bar-widget,service   Workspace Modes
 ```
 
 The widget appears in your bar immediately, reading `○ No mode`. If it does
@@ -170,9 +170,9 @@ keybindings:
 
 ```bash
 mkdir -p ~/.local/bin
-ln -sf ~/.config/omarchy/plugins/io.github.anishfn.omara/bin/omara \
-  ~/.local/bin/omara
-omara status
+ln -sf ~/.config/omarchy/plugins/io.github.anishfn.workspace-modes/bin/wsmodes \
+  ~/.local/bin/wsmodes
+wsmodes status
 ```
 
 Everything it does is also reachable without it, through
@@ -181,24 +181,57 @@ Everything it does is also reachable without it, through
 ### Update
 
 ```bash
-omarchy plugin update io.github.anishfn.omara
+omarchy plugin update io.github.anishfn.workspace-modes
 ```
 
 Your modes live outside the plugin folder, so an update never touches them.
 
+### Upgrading from Omara
+
+This plugin used to be called **Omara**. The name is the only thing that
+changed; your modes are still your modes.
+
+The first time the new version starts and finds no `wsmodes.json`, it reads
+your old `~/.config/omarchy/omara.json` and saves it under the new name.
+Nothing is moved or deleted — the old file stays exactly where it is — and the
+adoption happens once, so deleting every mode does not bring them back on the
+next reload.
+
+Three things do need a hand, because they carry the old id or the old command
+name:
+
+```bash
+# the plugin id changed, so re-add and re-enable it
+omarchy plugin remove io.github.anishfn.omara
+omarchy plugin add https://github.com/anishfn/workspace-modes.git
+omarchy plugin enable io.github.anishfn.workspace-modes --section left
+
+# the CLI is now `wsmodes`
+rm -f ~/.local/bin/omara
+ln -sf ~/.config/omarchy/plugins/io.github.anishfn.workspace-modes/bin/wsmodes \
+  ~/.local/bin/wsmodes
+```
+
+Then update any keybindings in `~/.config/hypr/` that call `omara` to call
+`wsmodes` instead. Mode ids did not change, so `wsmodes activate coding` still
+means what `omara activate coding` meant.
+
+Once everything works, `rm ~/.config/omarchy/omara.json` and
+`rm ~/.local/state/omarchy/omara-state.json`.
+
 ### Uninstall
 
 ```bash
-omarchy plugin remove io.github.anishfn.omara
+omarchy plugin remove io.github.anishfn.workspace-modes
 ```
 
 That removes the plugin and its bar placement. Your modes are left behind in
 case you come back. To go the rest of the way:
 
 ```bash
-rm ~/.config/omarchy/omara.json
-rm ~/.local/state/omarchy/omara-state.json
-rm -f ~/.local/bin/omara
+rm ~/.config/omarchy/wsmodes.json
+rm ~/.local/state/omarchy/wsmodes-state.json
+rm -f ~/.local/bin/wsmodes
 ```
 
 Removing the plugin does **not** put back a wallpaper, theme, audio output, or
@@ -209,9 +242,9 @@ desktop back the way it was.
 
 | Path | What |
 |---|---|
-| `~/.config/omarchy/plugins/io.github.anishfn.omara/` | the plugin itself |
-| `~/.config/omarchy/omara.json` | your modes, safe to version-control |
-| `~/.local/state/omarchy/omara-state.json` | what to put back on *Disable mode* |
+| `~/.config/omarchy/plugins/io.github.anishfn.workspace-modes/` | the plugin itself |
+| `~/.config/omarchy/wsmodes.json` | your modes, safe to version-control |
+| `~/.local/state/omarchy/wsmodes-state.json` | what to put back on *Disable mode* |
 
 Those three are the only paths Workspace Modes writes.
 
@@ -245,7 +278,7 @@ one, and you end up on the workspace you chose.
 
 ![The manage panel](preview.png)
 
-Right-click the bar widget, or run `omara manage`.
+Right-click the bar widget, or run `wsmodes manage`.
 
 Your modes are the chips along the top; the one you are on is the one below.
 The panel is the workspace canvas and almost nothing else, because what a
@@ -279,8 +312,21 @@ changed and the behavior switches that apply to all of them.
 typing. It records:
 
 - every open window, matched to its installed application, with the workspace it is on
+- what each window was actually started with, and the folder it is sitting in
 - the workspace you are looking at, as where the mode leaves you
 - the current Do Not Disturb state, audio output, wallpaper, and theme
+
+The second line is what makes a capture worth taking rather than rebuilding by
+hand. A terminal running `btop` captures as `foot -e btop`; a terminal opened in
+`~/Projects` captures with that folder; a browser on a page captures with the
+URL. Two terminals side by side, one running something and one just sitting in
+a folder, capture as two panes rather than collapsing into one.
+
+Both come from `/proc`, which only answers about your own processes — a window
+belonging to something else captures by name alone. What lands on the pane is
+filtered, not raw: a URL, a file you opened, or everything after a terminal's
+`-e` is kept, and the flags a launcher added for its own reasons are dropped.
+That heuristic is a guess. Read the panes before you save.
 
 The editor opens on the result straight away, because a capture is a starting
 point rather than a finished mode. Two Firefox windows on two workspaces
@@ -291,7 +337,7 @@ those fields back to *Leave unchanged*.
 From the command line:
 
 ```bash
-omara capture "Right now"
+wsmodes capture "Right now"
 ```
 
 ### Applications
@@ -313,22 +359,57 @@ ghostty -e btop
 omarchy-launch-terminal
 ```
 
-A custom command is edited in the pane it will run in: pick the pane and the
-name becomes the field.
+#### Arguments and a folder
+
+Every pane, whether it holds a desktop entry or a custom command, can also
+carry two things a `.desktop` file has no way to express:
+
+| Field | What it is |
+|---|---|
+| **Arguments** | Appended to the launch, split the way a shell would split them. A file, a URL, or for a terminal the command to run instead of a shell. |
+| **Folder** | The directory the program starts in — the `cd` you would otherwise type first. |
+
+So a terminal that opens on a project and starts something there is one pane:
+
+```
+Foot     arguments  -e claude
+         folder     ~/Projects/omarchy
+```
+
+Both are edited in the pane they run in: pick the pane and its name becomes the
+fields. Panes too small to hold a field just show what they run, on one line
+under the name, which is what tells two otherwise identical terminals apart.
+
+A folder is stored the way you type it — `~/Projects`, not
+`/home/you/Projects` — so a mode exported off one machine still opens the right
+thing on another. `~` is expanded once, at launch.
+
+Neither field is handed to a shell to parse. Arguments are split first and
+passed as separate words, and the folder is passed to `cd` as an argument, so a
+file name with a space in it is one argument and a file name with a `;` in it
+is still a file name. Giving a desktop entry either one does mean it is
+launched from its own `Exec` line rather than through `gtk-launch`, so it no
+longer lands in its own systemd scope; a pane with neither is launched exactly
+as before.
 
 An application can also be switched off without being removed — `"enabled":
 false` in the config file. Its pane stays on the canvas, greyed, and the mode
 leaves it alone. There is no button for it in the editor; a pane you do not
 want is a pane you close.
 
-### Icons
+### Name and icon
 
-Click the chip of the mode you already have open — its icon, or the empty slot
-where one would go — and the picker opens without leaving the canvas. The same
-box sits next to the name under **Options**.
+Click the chip of the mode you already have open and the **Mode** panel opens
+without leaving the canvas: its name on top, the icon grid below. They are the
+two halves of the same decision — the chip is the only place either one shows —
+so they are made together, and renaming lives here rather than in a field under
+*Options*. The button under **Options** opens the same panel.
 
-Search by what you are doing (`code`, `game`, `focus`, `music`, `terminal`) or
-browse. **No icon** is always there.
+Renaming keeps the mode's id, so keybindings and `wsmodes activate` keep
+working.
+
+Search icons by what you are doing (`code`, `game`, `focus`, `music`,
+`terminal`) or browse. **No icon** is always there.
 
 The set is drawn from the glyphs Omarchy's own menu ships, so everything in the
 grid is guaranteed to render in your font rather than showing up as an empty
@@ -531,7 +612,7 @@ always keeps what is open.
 
 The question is a click-only thing. Automatic triggers, the shell restart
 restore, and the CLI never wait on a dialog: they keep your windows unless you
-say otherwise with `omara activate <id> --close`.
+say otherwise with `wsmodes activate <id> --close`.
 
 ---
 
@@ -541,15 +622,15 @@ Workspace Modes registers no shortcuts. Add what you like to your Hyprland
 config:
 
 ```
-bindd = SUPER, C, Workspace Modes, exec, omara menu
-bindd = SUPER SHIFT, C, Coding mode, exec, omara activate coding
-bindd = SUPER ALT, C, Manage modes, exec, omara manage
+bindd = SUPER, C, Workspace Modes, exec, wsmodes menu
+bindd = SUPER SHIFT, C, Coding mode, exec, wsmodes activate coding
+bindd = SUPER ALT, C, Manage modes, exec, wsmodes manage
 ```
 
 Without the CLI on your `PATH`, go through the shell directly:
 
 ```
-bindd = SUPER, C, Workspace Modes, exec, omarchy-shell shell toggle io.github.anishfn.omara
+bindd = SUPER, C, Workspace Modes, exec, omarchy-shell shell toggle io.github.anishfn.workspace-modes
 ```
 
 ---
@@ -557,26 +638,26 @@ bindd = SUPER, C, Workspace Modes, exec, omarchy-shell shell toggle io.github.an
 ## Command line
 
 ```
-omara list              every mode, as JSON
-omara names             ids, one per line
-omara current           the active id, empty if none
-omara status            one-line summary
-omara activate <id> [--close|--keep]
-omara deactivate
-omara capture [name]    make a mode from the desktop as it is
-omara menu              open the bar popup
-omara manage            open the manage panel
-omara close             close the manage panel
-omara edit <id>
-omara log               what recent activations did
-omara export [id]       export document on stdout
-omara reload            re-read the config file
+wsmodes list              every mode, as JSON
+wsmodes names             ids, one per line
+wsmodes current           the active id, empty if none
+wsmodes status            one-line summary
+wsmodes activate <id> [--close|--keep]
+wsmodes deactivate
+wsmodes capture [name]    make a mode from the desktop as it is
+wsmodes menu              open the bar popup
+wsmodes manage            open the manage panel
+wsmodes close             close the manage panel
+wsmodes edit <id>
+wsmodes log               what recent activations did
+wsmodes export [id]       export document on stdout
+wsmodes reload            re-read the config file
 ```
 
 `log` is the detail behind the summary notification:
 
 ```
-$ omara log
+$ wsmodes log
       Activating Coding
       Workspace → 1
       Launched Ghostty on workspace 1
@@ -589,11 +670,11 @@ WARN  Activated Coding with 1 warning(s)
 
 ## Import and export
 
-**Export** writes `omara-export.json` to a folder you pick, or prints one
+**Export** writes `wsmodes-export.json` to a folder you pick, or prints one
 mode to stdout:
 
 ```bash
-omara export gaming > gaming.json
+wsmodes export gaming > gaming.json
 ```
 
 **Import** previews the file first. The preview lists the *exact lines* each
@@ -636,7 +717,7 @@ reopens six windows is hostile.
 
 ## Config file
 
-Everything lives in `~/.config/omarchy/omara.json`:
+Everything lives in `~/.config/omarchy/wsmodes.json`:
 
 ```json
 {
@@ -675,7 +756,8 @@ Everything lives in `~/.config/omarchy/omara.json`:
         ]
       },
       "applications": [
-        { "uid": "p1", "desktopId": "com.mitchellh.ghostty", "workspace": 1, "enabled": true },
+        { "uid": "p1", "desktopId": "com.mitchellh.ghostty", "args": "-e claude",
+          "directory": "~/Projects", "workspace": 1, "enabled": true },
         { "uid": "p2", "command": "chromium --new-window https://github.com", "workspace": 2, "enabled": true }
       ],
       "commands": { "onActivate": [], "onDeactivate": [] },
@@ -691,7 +773,11 @@ Everything lives in `~/.config/omarchy/omara.json`:
 different instruction from `"dnd": null`. The first turns Do Not Disturb off,
 the second does not touch it.
 
-An application has either a `desktopId` or a `command`, never both.
+An application has either a `desktopId` or a `command`, never both. Either can
+also carry `args` and `directory`, and both are optional: `args` is appended to
+the launch and split the way a shell would split it, and `directory` is the
+folder it starts in, written `~`-relative so the mode travels between machines.
+Neither is passed to a shell to be parsed.
 
 `workspaces.layouts` is the canvas: one entry per workspace tab, each holding a
 binary split tree. A node is either a leaf (`{"app": "<uid>"}`, or `""` for an
@@ -708,7 +794,7 @@ the order the panes read.
 
 Editing the file by hand works; the plugin watches it and reloads live. Replace
 it wholesale (a dotfiles `git checkout`, a restored backup) and the change is
-picked up within a minute, or immediately with `omara reload`.
+picked up within a minute, or immediately with `wsmodes reload`.
 
 ---
 
@@ -719,8 +805,17 @@ plugin. Precisely what that means here:
 
 **It never** makes a network request, downloads or evaluates code from anywhere,
 collects telemetry, runs anything on install or import, writes outside
-`~/.config/omarchy/omara.json` and
-`~/.local/state/omarchy/omara-state.json`, or asks for elevated privileges.
+`~/.config/omarchy/wsmodes.json` and
+`~/.local/state/omarchy/wsmodes-state.json`, or asks for elevated privileges.
+
+**Capture reads `/proc`.** To record what a window was started with and the
+folder it is sitting in, capture reads `cmdline` and `cwd` for the processes
+behind the windows currently open — your own processes, under normal kernel
+permissions, and only when you press *Capture desktop*. Nothing is read in the
+background, nothing is sent anywhere, and a process that does not answer simply
+captures by name. A command line can contain things you did not mean to write
+down; what lands on a pane is filtered, and it is shown to you in the editor
+before anything is saved.
 
 **It does run programs, but only the ones you configured:**
 
@@ -731,6 +826,14 @@ collects telemetry, runs anything on install or import, writes outside
   as an argv vector through `bash -lc 'exec "$@"' bash <argv...>`. The script is
   a constant; your tokens are positional parameters. A filename, URL, or `$(...)`
   inside an argument is literal data and can never become a second command.
+- **Arguments and folders** go the same way. `args` is tokenized and appended to
+  the argv; `directory` is passed as a positional parameter to a second constant,
+  `cd -- "$1" || exit 1; shift; exec "$@"`. Neither is spliced into a script. On
+  the placement path, where Hyprland's `exec` rule takes one string, every word
+  including the folder is shell-quoted first. Giving a desktop entry either field
+  does change how it starts — from its own `Exec` line rather than through
+  `gtk-launch`, so no systemd scope of its own — which is why a pane with neither
+  still takes the original path.
 - **`onActivate` / `onDeactivate`** *are* shell strings, deliberately, and the
   only ones. They run as `bash -lc '<your string>'` — as you, through your login
   shell, exactly like a line in your own dotfiles. Nothing quotes or restricts
@@ -824,13 +927,13 @@ exploit.
 ## Troubleshooting
 
 **The widget is not in my bar.** `omarchy plugin list` should show
-`io.github.anishfn.omara` enabled. If not:
-`omarchy plugin enable io.github.anishfn.omara --section left`.
+`io.github.anishfn.workspace-modes` enabled. If not:
+`omarchy plugin enable io.github.anishfn.workspace-modes --section left`.
 
 **The CLI says the plugin is not enabled.** It talks to the running shell. Check
 `omarchy-shell shell ping`, then that the plugin is enabled.
 
-**A mode did not do everything.** `omara log`, or the *Activity*
+**A mode did not do everything.** `wsmodes log`, or the *Activity*
 tab in the manage panel. A missing executable, an unplugged device, or an
 unreadable wallpaper is a warning; the rest of the mode still applied.
 
@@ -855,10 +958,10 @@ Plug it in and activate again; the mode is not rewritten.
 **The wallpaper chooser seems to do nothing.** The editor unmaps itself while an
 external chooser is open. A layer-shell overlay sits above every window, so the
 dialog would otherwise open behind it. If the chooser fails to start at all,
-`omara log` records the exit code.
+`wsmodes log` records the exit code.
 
-**I edited omara.json and nothing happened.** `omara reload`. If
-the file could not be parsed, a copy was saved as `omara.json.corrupt` and
+**I edited wsmodes.json and nothing happened.** `wsmodes reload`. If
+the file could not be parsed, a copy was saved as `wsmodes.json.corrupt` and
 the plugin started from defaults rather than overwriting your only copy.
 
 **The theme list is empty.** Workspace Modes reads `$OMARCHY_PATH/themes` and
@@ -878,8 +981,8 @@ on under *Settings*, and check the class matches what
 ## Development
 
 ```bash
-git clone https://github.com/anishfn/omara.git
-cd omara
+git clone https://github.com/anishfn/workspace-modes.git
+cd workspace-modes
 node --test tests/          # pure-logic unit tests, no desktop needed
 omarchy plugin validate .   # the same checks the shell enforces
 ```
@@ -892,27 +995,27 @@ external choosers, the IPC methods the CLI calls, and that every icon comes
 from the shared glyph map.
 
 To iterate against a live shell, work in
-`~/.config/omarchy/plugins/io.github.anishfn.omara/`, where saving any file reloads the
+`~/.config/omarchy/plugins/io.github.anishfn.workspace-modes/`, where saving any file reloads the
 plugin. QML is cached on disk, so if a stale compile error keeps reappearing
 after you fixed it, `omarchy-restart-shell` clears it.
 
 | File | What it is |
 |---|---|
 | `Model.js` | Schema, activation plans, triggers, import/export, and the bounded parsers for subprocess output. No Qt and no Quickshell, which is why node can test it. |
-| `Service.qml` | Config file, runtime snapshot, activation, triggers, the `omara` IPC target, and the editor window. |
+| `Service.qml` | Config file, runtime snapshot, activation, triggers, the `wsmodes` IPC target, and the editor window. |
 | `BarWidget.qml` | Bar button and switcher popup. |
 | `ModeRow.qml` | One mode in a list. Reserves the icon slot whether or not the mode filled it, so names line up. |
-| `OmaraMark.qml` | The bar mark, drawn as three rectangles on a nine-unit grid so it takes the theme's colour and lands on whole pixels. |
+| `ModesMark.qml` | The bar mark, drawn as three rectangles on a nine-unit grid so it takes the theme's colour and lands on whole pixels. |
 | `EditorWindow.qml` | The manage / edit overlay. |
 | `ModeForm.qml` | The edit form for one mode. |
 | `WorkspaceCanvas.qml` | The workspace canvas: tabs, the app list, and the drag-and-drop panes. Draws and hit-tests from one `Model.paneRects` call. |
 | `AppPicker.qml` | Installed-application picker, backed by the shell's `AppLibrary`. |
-| `IconPicker.qml` | Glyph grid for the mode icon, backed by `icons.json`. |
+| `IconPicker.qml` | The **Mode** panel: what a mode is called and what it looks like. Name field, plus the glyph grid backed by `icons.json`. |
 | `ThemePicker.qml` | Installed-theme picker, shipped themes and your own. |
 | `PromptDialog.qml` | Modal with more than two answers, which `ConfirmDialog` cannot do. |
 | `SwitchDialog.qml` | The close-or-keep question, in its own overlay window. |
 | `icons.json` | Curated Nerd Font glyphs with search keywords. |
-| `bin/omara` | CLI over the `omara` IPC target. |
+| `bin/wsmodes` | CLI over the `wsmodes` IPC target. |
 
 The shell instantiates a `service` plugin exactly once per session, which is
 what makes "the active mode" one answer rather than one per monitor.

