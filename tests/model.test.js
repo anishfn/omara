@@ -1416,9 +1416,93 @@ test("probe output is bounded and cannot inherit from Object.prototype", () => {
   const huge = Model.parseProbeOutput("WALLPAPER\t" + "x".repeat(200000))
   assert.ok(huge.wallpaper.length <= 4096)
 
-  // A closed record: four known keys, whatever the output says.
+  // A closed record: five known keys, whatever the output says.
   assert.deepEqual(Object.keys(Model.parseProbeOutput("EVIL\tx\nWALLPAPER\ta")).sort(),
-    ["missing", "processes", "theme", "wallpaper"])
+    ["dnd", "missing", "processes", "theme", "wallpaper"])
+
+  // Do Not Disturb is read out of the notifications service's settings file as
+  // text. Anything that is not an unambiguous boolean is "do not know", which
+  // is null and is not the same answer as off.
+  assert.equal(Model.parseProbeOutput('DND\t{"version":3,"dnd":true}').dnd, true)
+  assert.equal(Model.parseProbeOutput('DND\t{"version":3,"dnd":false}').dnd, false)
+  assert.equal(Model.parseProbeOutput("DND\t").dnd, null)
+  assert.equal(Model.parseProbeOutput("DND\tnot json at all").dnd, null)
+  assert.equal(Model.parseProbeOutput("WALLPAPER\ta").dnd, null)
+  assert.equal(Model.emptyProbeResult().dnd, null)
+})
+
+test("the application list does not depend on a host library this plugin is not given", () => {
+  const manifest = JSON.parse(read("manifest.json"))
+  // The shell injects shell.appLibrary only into a plugin declaring the "menu"
+  // kind, and declaring it here would move this plugin onto the panel loader
+  // and take the bar widget with it. If this ever becomes true on purpose, the
+  // fallback below is what stops being load-bearing — not the other way round.
+  assert.ok(manifest.kinds.indexOf("menu") === -1)
+
+  const service = read("Service.qml")
+  // A fallback, not a replacement: the host's library still wins when there is
+  // one, so nothing regresses if that gate opens.
+  assert.match(service, /AppLibrary\s*\{/)
+  assert.match(service, /appLibrary:\s*shell && shell\.appLibrary \? shell\.appLibrary : ownAppLibrary/)
+
+  // Every call the list and the picker make has to exist on the fallback.
+  const library = read("AppLibrary.qml")
+  for (const fn of ["sortedEntries", "entryName", "entrySubtext", "iconSource", "refreshIcons"])
+    assert.match(library, new RegExp(`function ${fn}\\(`))
+  // launch is deliberately absent: launchDesktopEntry tests for it and has its
+  // own uwsm-app path, which is the one that reports a verdict.
+  assert.doesNotMatch(library, /function launch\(/)
+  assert.match(service, /typeof appLibrary\.launch === "function"/)
+
+  // The same two filters the shell applies, read from the same two places, so
+  // an application hidden from the menu is not offered here.
+  assert.match(library, /launcher\.hides/)
+  assert.match(library, /hidden-entries\.sh/)
+  assert.match(read("AppSearch.js"), /entry\.noDisplay/)
+})
+
+test("the sidebar orders applications the way the launcher does", () => {
+  const AppSearch = require("../AppSearch.js")
+  const entries = [
+    { id: "org.mozilla.firefox", name: "Firefox", genericName: "Web Browser" },
+    { id: "com.obsproject.Studio", name: "OBS Studio", genericName: "Streaming" },
+    { id: "org.gnome.Nautilus", name: "Files", comment: "Browse the file system" }
+  ]
+  const names = (q) => AppSearch.sortedEntries(entries, q, null).map((r) => r.entry.name)
+
+  // No query: plain alphabetical, so the list does not reshuffle as you type
+  // and then delete.
+  assert.deepEqual(names(""), ["Files", "Firefox", "OBS Studio"])
+  // Two name prefixes tie, and the shorter name wins: it is the one the query
+  // is closer to being all of.
+  assert.deepEqual(names("fi"), ["Files", "Firefox"])
+  // A name prefix outranks a hit in another entry's comment.
+  assert.deepEqual(names("fire"), ["Firefox"])
+  // An acronym reaches an entry whose words it spells.
+  assert.deepEqual(names("obs"), ["OBS Studio"])
+  // Something nothing matches returns nothing rather than everything.
+  assert.deepEqual(names("zzzz"), [])
+  // A hidden entry is filtered before it is ranked.
+  assert.deepEqual(
+    AppSearch.sortedEntries(entries, "", (e) => e.id === "org.mozilla.firefox").map((r) => r.entry.name),
+    ["Files", "OBS Studio"])
+  // noDisplay is the .desktop file's own answer and is always honoured.
+  assert.deepEqual(
+    AppSearch.sortedEntries(entries.concat([{ id: "x", name: "Aaa", noDisplay: true }]), "", null)
+      .map((r) => r.entry.name),
+    ["Files", "Firefox", "OBS Studio"])
+})
+
+test("an unknown live Do Not Disturb does not cancel the restore", () => {
+  const snapshot = { dnd: false, appliedDnd: true }
+  const kinds = (live) => Model.restorePlan(snapshot, live).map((s) => s.kind)
+
+  // The comparison is there to spot someone who changed it themselves since
+  // the mode set it. Only an actual, different reading is that evidence.
+  assert.deepEqual(kinds({ dnd: true }), ["dnd"])
+  assert.deepEqual(kinds({ dnd: false }), [])
+  assert.deepEqual(kinds({ dnd: null }), ["dnd"])
+  assert.deepEqual(kinds({}), ["dnd"])
 })
 
 test("a guarded read reports a closed set of verdicts, and caps the body", () => {

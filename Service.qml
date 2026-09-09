@@ -618,10 +618,54 @@ Item {
 
   // ----------------------------------------------------------- environment
 
-  readonly property var appLibrary: shell && shell.appLibrary ? shell.appLibrary : null
+  // The host's library when the host offers one, and the plugin's own when it
+  // does not. It does not: `shell.appLibrary` is injected only into plugins
+  // declaring the `menu` kind, and this plugin is a bar widget and a service.
+  // Preferring the host's is not dead code — it is what keeps this working if
+  // that gate ever opens — but the fallback is the path that actually runs,
+  // and it is the reason the sidebar has applications in it.
+  AppLibrary {
+    id: ownAppLibrary
+    omarchyPath: service.omarchyPath
+  }
 
+  readonly property var appLibrary: shell && shell.appLibrary ? shell.appLibrary : ownAppLibrary
+
+  // Same story. `serviceFor` is scoped to the caller's own plugin id, so a
+  // third-party plugin asking for "omarchy.notifications" is handed null; the
+  // wider `firstPartyServiceFor` is reserved for full-bar plugins. Reading Do
+  // Not Disturb through it therefore always answered "unknown", which meant a
+  // mode never captured the DND it was in and deactivating never put it back.
+  //
+  // The state is a two-key file the notifications service owns and rewrites
+  // atomically, so reading it directly answers the same question the injected
+  // service would have.
   readonly property var notificationsService: shell && typeof shell.serviceFor === "function"
     ? shell.serviceFor("omarchy.notifications") : null
+
+  // The notifications service owns this and rewrites it atomically; it is two
+  // keys long. Read the same bounded way every other state file here is read —
+  // never through FileView, which takes a pathname and would block the shell
+  // on a FIFO left at that name.
+  property var dndValue: null
+
+  function refreshDnd() {
+    if (dndProcess.running) return
+    dndProcess.command = bounded(2, [binBash, "-lc", dndScript, "bash"])
+    dndProcess.running = true
+  }
+
+  readonly property string dndScript:
+    safePath +
+    'head -c 256 "$HOME/.local/state/omarchy/notifications.json" 2>/dev/null | tr -d \'\\011\\012\'\n'
+
+  Process {
+    id: dndProcess
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: service.dndValue = Model.parseDndState(text)
+    }
+  }
 
   readonly property var sinkNodes: {
     var out = []
@@ -633,8 +677,14 @@ Item {
     return out
   }
 
+  // null means "could not tell", and every caller treats it as such: a
+  // snapshot without a dnd key restores nothing rather than guessing off.
+  // null means "could not tell". Callers treat that as unknown rather than as
+  // off: a snapshot records nothing, and a restore goes ahead rather than
+  // declining on a comparison it cannot make.
   function currentDnd() {
-    return notificationsService ? notificationsService.doNotDisturb === true : null
+    if (notificationsService) return notificationsService.doNotDisturb === true
+    return service.dndValue
   }
 
   function currentAudioOutput() {
@@ -658,6 +708,10 @@ Item {
 
   function setDnd(value) {
     var on = value === true
+    // The write is what the cache would have read next anyway, and the file
+    // behind it is saved on a debounce, so re-reading it now would as often as
+    // not answer with the value being replaced.
+    service.dndValue = on
     if (notificationsService && typeof notificationsService.setDoNotDisturb === "function") {
       notificationsService.setDoNotDisturb(on)
       runSupervised(["omarchy-shell", "-q", "omarchy.indicators", "refresh"], "indicator refresh", false)
@@ -1007,6 +1061,8 @@ Item {
     'printf \'WALLPAPER\\t%s\\n\' "$ws"\n' +
     'th=$(head -c 256 "$HOME/.local/state/omarchy/current/theme.name" 2>/dev/null | head -n 1)\n' +
     'printf \'THEME\\t%s\\n\' "$th"\n' +
+    'dnd=$(head -c 256 "$HOME/.local/state/omarchy/notifications.json" 2>/dev/null | tr -d \'\\011\\012\')\n' +
+    'printf \'DND\\t%s\\n\' "$dnd"\n' +
     'n=0\n' +
     'for bin in "$@"; do\n' +
     '  n=$((n + 1)); [ "$n" -gt 256 ] && break\n' +
@@ -1030,6 +1086,8 @@ Item {
     'printf \'WALLPAPER\\t%s\\n\' "$ws"\n' +
     'th=$(head -c 256 "$HOME/.local/state/omarchy/current/theme.name" 2>/dev/null | head -n 1)\n' +
     'printf \'THEME\\t%s\\n\' "$th"\n' +
+    'dnd=$(head -c 256 "$HOME/.local/state/omarchy/notifications.json" 2>/dev/null | tr -d \'\\011\\012\')\n' +
+    'printf \'DND\\t%s\\n\' "$dnd"\n' +
     'n=0\n' +
     'for pid in "$@"; do\n' +
     '  n=$((n + 1)); [ "$n" -gt 128 ] && break\n' +
@@ -1057,7 +1115,13 @@ Item {
     id: probeProcess
     stdout: StdioCollector {
       waitForEnd: true
-      onStreamFinished: service.probeResult = Model.parseProbeOutput(text)
+      onStreamFinished: {
+        service.probeResult = Model.parseProbeOutput(text)
+        // The probe read the file a moment ago, which is fresher than
+        // anything the cache holds. A probe that could not read it leaves the
+        // cache alone rather than blanking it.
+        if (service.probeResult.dnd !== null) service.dndValue = service.probeResult.dnd
+      }
     }
     onExited: function(exitCode) {
       service.settleProbe(exitCode === 0 ? ""
@@ -1617,7 +1681,10 @@ Item {
     id: captureProcess
     stdout: StdioCollector {
       waitForEnd: true
-      onStreamFinished: service.captureResult = Model.parseProbeOutput(text)
+      onStreamFinished: {
+        service.captureResult = Model.parseProbeOutput(text)
+        if (service.captureResult.dnd !== null) service.dndValue = service.captureResult.dnd
+      }
     }
     onExited: service.settleCapture("")
   }
@@ -1921,6 +1988,7 @@ Item {
   Component.onCompleted: {
     service.loadStateFromDisk()
     service.loadConfigFromDisk()
+    service.refreshDnd()
   }
 
   property bool restoreAttempted: false

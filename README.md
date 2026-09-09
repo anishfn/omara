@@ -1025,7 +1025,9 @@ after you fixed it, `omarchy-restart-shell` clears it.
 | `EditorWindow.qml` | The manage / edit overlay. |
 | `ModeForm.qml` | The edit form for one mode. |
 | `WorkspaceCanvas.qml` | The workspace canvas: tabs, the app list, and the drag-and-drop panes. Draws and hit-tests from one `Model.paneRects` call. |
-| `AppPicker.qml` | Installed-application picker, backed by the shell's `AppLibrary`. |
+| `AppPicker.qml` | Installed-application picker, backed by `AppLibrary.qml`. |
+| `AppLibrary.qml` | The installed applications: `DesktopEntries`, the launcher's hide list, and an icon index for icons Qt's cache has not seen. The shell has one of these and only lends it to plugins declaring the `menu` kind, so this plugin reads the same sources itself. |
+| `AppSearch.js` | Ranking and filtering for that list, in the launcher's order so both lists behave the same. |
 | `IconPicker.qml` | The **Mode** panel: what a mode is called and what it looks like. Name field, plus the glyph grid backed by `icons.json`. |
 | `ThemePicker.qml` | Installed-theme picker, shipped themes and your own. |
 | `PromptDialog.qml` | Modal with more than two answers, which `ConfirmDialog` cannot do. |
@@ -1043,6 +1045,11 @@ Two rules worth knowing before changing anything:
   against the font `monospace` actually resolves to before it ships.
 - **`activating` must always come back down.** Activation is wrapped in
   `try/finally`; a stuck flag refuses every future switch.
+- **The host shell is asked, never assumed.** `shell.appLibrary` and
+  `shell.serviceFor` are capability-scoped: a third-party plugin is handed null
+  for both, silently. Anything read through them needs a path that works
+  without them, which is why the application list and the Do Not Disturb read
+  both have one.
 
 ---
 

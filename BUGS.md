@@ -262,3 +262,48 @@ silently, and the arrangement went with no record.
 
 Fixed: the subtree collapses to the first application it held rather than to
 nothing.
+
+### 18. The application list was empty
+
+`Service.qml`, `WorkspaceCanvas.qml`, `AppPicker.qml` — `appLibrary`
+
+The sidebar in the editor and the application picker both read
+`service.appLibrary`, which was `shell.appLibrary` or nothing. The shell only
+injects that into a plugin whose manifest declares the `menu` kind — the
+launcher's kind. This plugin is a bar widget and a service, so it was handed
+null, and both lists came up empty with nothing in the log to say why.
+
+Declaring `menu` to get at it is not the fix. That kind moves a plugin onto
+the shell's panel loader and expects a `menu` entry point, which would take
+this plugin's bar widget with it.
+
+Fixed: `AppLibrary.qml` and `AppSearch.js`. `DesktopEntries` is Quickshell's
+and available to anything, and the two filters the shell layers on top of it —
+`default/omarchy/launcher.hides` and the entries a `.desktop` file hides
+itself, via the shell's own `hidden-entries.sh` — are read from the same two
+places, so this list and the launcher's hold the same applications in the same
+order. `service.appLibrary` still prefers the host's library when there is
+one; the fallback is what actually runs.
+
+### 19. A mode never captured Do Not Disturb, and never put it back
+
+`Service.qml` — `notificationsService`, `currentDnd()`
+
+`shell.serviceFor` is scoped to the caller's own plugin id, so asking it for
+`omarchy.notifications` returns null; the wider `firstPartyServiceFor` is
+reserved for full-bar plugins. `currentDnd()` therefore always answered null.
+
+Three things followed. A capture wrote `dnd: null` into every mode it made. An
+activation recorded no DND in its restore snapshot. And `restorePlan` read the
+null as a *disagreement* — the check is there to spot someone who changed DND
+themselves since the mode set it — so even a snapshot that had a value would
+decline to restore it.
+
+Fixed on all three counts. The state is a two-key file the notifications
+service owns and rewrites atomically, so it is read directly: a `DND` line in
+the probe and capture scripts, which is where wallpaper and theme already come
+from, plus a small bounded read at startup and after this plugin sets DND
+itself. Not through `FileView` — a pathname handed to `FileView` is the
+check-then-use this file has a rule against. `restorePlan` now treats an
+unknown live value as no evidence rather than as evidence against, which is
+what it already did for audio output.

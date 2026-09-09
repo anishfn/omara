@@ -1196,7 +1196,11 @@ function restorePlan(snapshot, current) {
 
   if (snapshot.dnd !== undefined && snapshot.dnd !== null) {
     var appliedDnd = snapshot.appliedDnd
-    if (appliedDnd === undefined || live.dnd === undefined || live.dnd === appliedDnd)
+    // An unknown live value declines nothing. The comparison exists to spot a
+    // person who changed Do Not Disturb themselves since the mode set it, and
+    // "could not tell" is not evidence that they did.
+    if (appliedDnd === undefined || live.dnd === undefined || live.dnd === null
+      || live.dnd === appliedDnd)
       steps.push({ kind: "dnd", label: "Restore Do Not Disturb", value: snapshot.dnd })
   }
   if (snapshot.audioOutput) {
@@ -1404,8 +1408,19 @@ function probeField(value) {
 // it rides on is split by tabs.
 var PROC_ARG_SEPARATOR = "\u001f"
 
+// The notifications service's settings file, read as text rather than parsed:
+// it is two keys long, the only one that matters here is a boolean, and a file
+// that is missing, truncated or something else entirely has to answer "do not
+// know" rather than throw. null is that answer, and it is not the same as off.
+function parseDndState(text) {
+  var raw = typeof text === "string" ? text : String(text === undefined || text === null ? "" : text)
+  if (raw.length > 4096) raw = raw.slice(0, 4096)
+  var match = /"dnd"\s*:\s*(true|false)/.exec(raw)
+  return match ? match[1] === "true" : null
+}
+
 function parseProbeOutput(text) {
-  var out = { wallpaper: "", theme: "", missing: Object.create(null), processes: Object.create(null) }
+  var out = { wallpaper: "", theme: "", dnd: null, missing: Object.create(null), processes: Object.create(null) }
   var raw = typeof text === "string" ? text : String(text === undefined || text === null ? "" : text)
   if (raw.length > PROBE_MAX_BYTES) raw = raw.slice(0, PROBE_MAX_BYTES)
 
@@ -1415,6 +1430,7 @@ function parseProbeOutput(text) {
     var parts = lines[i].split("\t")
     if (parts[0] === "WALLPAPER") out.wallpaper = probeField(parts[1])
     else if (parts[0] === "THEME") out.theme = probeField(parts[1])
+    else if (parts[0] === "DND") out.dnd = parseDndState(parts[1])
     else if (parts[0] === "APP" && parts[1] === "missing") {
       var name = probeField(parts[2])
       if (name !== "") out.missing[name] = true
@@ -1452,7 +1468,7 @@ function parseFileResult(text, limit) {
 }
 
 function emptyProbeResult() {
-  return { wallpaper: "", theme: "", missing: Object.create(null), processes: Object.create(null) }
+  return { wallpaper: "", theme: "", dnd: null, missing: Object.create(null), processes: Object.create(null) }
 }
 
 // ---------------------------------------------------------------- triggers
@@ -2034,6 +2050,7 @@ if (typeof module !== "undefined" && module.exports) {
     PLACEMENT_TTL_MS: PLACEMENT_TTL_MS,
     placementKeys: placementKeys,
     parseProbeOutput: parseProbeOutput,
+    parseDndState: parseDndState,
     PROC_ARG_SEPARATOR: PROC_ARG_SEPARATOR,
     parseFileResult: parseFileResult,
     emptyProbeResult: emptyProbeResult,
