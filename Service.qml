@@ -330,10 +330,13 @@ Item {
   readonly property int fileMaxBytes: 4194304
   readonly property int fileDeadlineSec: 5
 
+  // `stat -L` on the directory only: ~/.config/omarchy is routinely a symlink
+  // into a dotfiles repo, and what matters is the owner and mode of the real
+  // directory. The file itself is still opened with nofollow.
   readonly property string dirCheck:
     'uid=$(id -u)\n' +
     'dir=${target%/*}\n' +
-    'dinfo=$(stat -c \'%F|%u|%a\' -- "$dir" 2>/dev/null) || fail "$dir cannot be read"\n' +
+    'dinfo=$(stat -L -c \'%F|%u|%a\' -- "$dir" 2>/dev/null) || fail "$dir cannot be read"\n' +
     'dtype=${dinfo%%|*}; drest=${dinfo#*|}\n' +
     'downer=${drest%%|*}; dmode=${drest##*|}\n' +
     '[ "$dtype" = directory ] || fail "$dir is not a directory (found: $dtype)"\n' +
